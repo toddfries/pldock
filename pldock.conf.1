@@ -1,0 +1,226 @@
+.\" Copyright (c) 2026 Todd T. Fries <todd@fries.net>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate: September 4 2026 $
+.Dt PLDOCK.CONF 1
+.Os
+.Sh NAME
+.Nm pldock.conf
+.Nd layout language for
+.Xr pldock 1
+.Sh DESCRIPTION
+.Xr pldock 1
+reads a nested box language that describes one dock rectangle and the
+X clients to swallow into it.
+.Ic key=value
+and
+.Ic key value
+are both accepted.
+.Ql #
+starts a comment to end of line.
+.Pp
+The file is a single
+.Ic dock { }
+block.
+Inside it, attributes may mix with
+.Ic hbox ,
+.Ic vbox ,
+and
+.Ic tile
+children.
+Several children of
+.Ic dock
+are wrapped in a
+.Ic vbox .
+.Sh DOCK ATTRIBUTES
+.Bl -tag -width Ds
+.It Ic pos
+.Ic top-left ,
+.Ic top-right ,
+.Ic bottom-left ,
+or
+.Ic bottom-right
+.Pq default
+on the chosen output.
+.It Ic screen
+.Xr xrandr 1
+output:
+.Ic primary
+.Pq default ,
+an output name such as
+.Ic HDMI-1 ,
+.Ic left ,
+.Ic right ,
+.Ic top ,
+.Ic bottom ,
+or a 0-based index.
+Width and height fractions are relative to this output, not the
+combined virtual screen.
+.It Ic width
+Pixels, a fraction
+.Pq Ic 1/3 ,
+or a percent
+.Pq Ic 33%
+of the output width.
+.It Ic height
+.Ic auto
+.Pq default; from the tile tree ,
+pixels, a fraction, or a percent of the output height.
+.It Ic gap
+Pixels between cells
+.Pq default 2 .
+.It Ic override
+Override-redirect
+.Pq default on so screen placement sticks under cwm .
+.Ic override=0
+or
+.Ic managed
+lets the window manager place the dock.
+.It Ic spawn
+If present,
+.Xr pldock 1
+forks tiles that are not already mapped.
+Off by default.
+.El
+.Sh BOXES AND TILES
+.Bl -tag -width Ds
+.It Ic hbox { ... }
+A row.
+Leftover width goes to children marked
+.Ic stretch ,
+split by
+.Ic weight
+.Pq default 1 .
+.It Ic vbox { ... }
+A column.
+Leftover height goes to
+.Ic stretch
+children.
+Boxes may nest arbitrarily.
+.It Ic tile Ar name
+Swallow a client.
+.Ar name
+looks up a built-in
+.Pq Ic wmclock , Ic wmapm , Ic xload , Ic xconsole
+for default command, match strings, and size hint.
+Any other
+.Ar name
+is used as both the command and the
+.Dv WM_CLASS
+pattern.
+Matching also uses the last path component, so
+.Pa /usr/local/bin/wmapm
+matches
+.Ic wmapm .
+.El
+.Pp
+Tile flags and attributes:
+.Bl -tag -width Ds
+.It Ic stretch
+Grow on the parent box's main axis and fill the cell.
+Native dockapps should omit this so they keep their size
+.Pq including SHAPE holes .
+.It Ic min= Ns Ar N
+Floor size in pixels when stretching.
+.It Ic weight= Ns Ar N
+Share of leftover space
+.Pq default 1 .
+.It Ic cmd= Ns Qq Ar a b c
+Command to spawn if
+.Ic spawn
+is on
+.Pq default: the tile name .
+.It Ic match= Ns Ar a,b
+.Dv WM_CLASS
+/
+.Dv WM_NAME
+patterns
+.Pq default: the tile name .
+.It Ic size= Ns Ar WxH
+Native size hint before the window maps.
+.El
+.Sh SEARCH PATH
+.Xr pldock 1
+loads the first file that exists:
+.Bl -enum -compact
+.It
+.Fl c Ar file
+.It
+.Ev PLDOCK_CONF
+.It
+.Pa ~/.config/pldock/pldock.conf
+.It
+.Pa ~/.pldock.conf
+.It
+.Pa pldock.conf
+beside the
+.Nm pldock
+script
+.El
+.Pp
+Otherwise the built-in default
+.Pq same layout as the shipped example
+is used.
+.Sh FILES
+.Bl -tag -width /usr/local/share/examples/pldock/pldock.conf -compact
+.It Pa ~/.config/pldock/pldock.conf
+.It Pa /usr/local/share/examples/pldock/pldock.conf
+Example installed by
+.Ic make install .
+.El
+.Sh EXAMPLES
+Lower right of the primary output, xconsole under a row of dockapps:
+.Bd -literal -offset indent
+dock {
+	pos     bottom-right
+	screen  primary
+	width   1/6
+	height  auto
+	gap     2
+
+	vbox {
+		hbox {
+			tile wmclock
+			tile wmapm
+			tile xload stretch
+		}
+		tile xconsole stretch min=96
+	}
+}
+.Ed
+.Pp
+Same layout on the right-hand monitor:
+.Bd -literal -offset indent
+dock {
+	pos     bottom-right
+	screen  HDMI-1
+	width   1/3
+	height  auto
+
+	vbox {
+		hbox {
+			tile wmclock
+			tile wmapm
+			tile xload stretch
+		}
+		tile xconsole stretch min=96
+	}
+}
+.Ed
+.Sh SEE ALSO
+.Xr cwm 1 ,
+.Xr pldock 1 ,
+.Xr xrandr 1
+.Sh AUTHORS
+.An Todd T. Fries Aq Mt todd@fries.net

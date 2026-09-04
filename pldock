@@ -1,0 +1,20 @@
+#!/usr/bin/perl
+#
+# Copyright (c) 2026 Todd T. Fries <todd@fries.net>
+#
+# Thin CLI stub for Pldock (see lib/Pldock.pm).
+
+use strict;
+use warnings;
+use File::Basename qw(dirname);
+use File::Spec;
+
+BEGIN {
+	my $here = dirname(File::Spec->rel2abs($0));
+	my $lib  = File::Spec->catdir($here, 'lib');
+	unshift @INC, $lib if -d $lib;
+}
+
+use Pldock;
+
+exit Pldock::run_cli(@ARGV);

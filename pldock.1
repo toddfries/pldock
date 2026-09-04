@@ -1,0 +1,192 @@
+.\" Copyright (c) 2026 Todd T. Fries <todd@fries.net>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate: September 4 2026 $
+.Dt PLDOCK 1
+.Os
+.Sh NAME
+.Nm pldock
+.Nd swallow X clients into a Perl X11 dock rectangle
+.Sh SYNOPSIS
+.Nm pldock
+.Op Fl v
+.Op Fl c Ar file
+.Op Fl screen Ar output
+.Op Fl pos Ar place
+.Op Fl top | Fl bottom
+.Op Fl height Ar pixels
+.Op Fl gap Ar pixels
+.Op Fl override | Fl managed
+.Op Fl spawn
+.Op Fl no-clock
+.Op Fl no-apm
+.Op Fl no-load
+.Op Fl no-console
+.Op Fl h
+.Sh DESCRIPTION
+.Nm
+creates one dark X11 rectangle and
+.Em swallows
+already-mapped clients into it using Perl
+.Nm X11::Protocol .
+It is a small Perl dock in the same style as xtomato's
+.Nm plxmessage :
+no toolkit.
+Default tiles are
+.Nm wmclock ,
+.Nm wmapm ,
+.Nm xload ,
+and
+.Nm xconsole .
+.Pp
+Geometry is relative to one
+.Xr xrandr 1
+output, not the combined virtual desktop.
+The default layout is the lower-right corner of the primary output,
+with
+.Nm xconsole
+along the bottom and the other three tiled in a row above it.
+See
+.Xr pldock.conf 1 .
+.Pp
+.Nm
+does not
+.Xr fork 2
+or
+.Xr execve 2
+clients unless
+.Fl spawn
+is given or the config contains
+.Ic spawn .
+Matching uses
+.Dv WM_CLASS
+and
+.Dv WM_NAME ,
+including the last path component, so a class of
+.Pa /usr/local/bin/wmapm
+matches tile
+.Ic wmapm .
+.Pp
+The dock is override-redirect by default so
+.Xr cwm 1
+does not steal
+.Fl screen
+placement.
+.Fl managed
+lets the window manager place it.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl c Ar file
+Read layout from
+.Ar file
+instead of the search path below.
+.It Fl screen Ar output
+Place the dock on this
+.Xr xrandr 1
+output:
+.Ic primary ,
+an output name
+.Pq e.g. HDMI-1 ,
+.Ic left ,
+.Ic right ,
+or a 0-based index.
+.It Fl pos Ar place
+Corner on that output:
+.Ic top-left ,
+.Ic top-right ,
+.Ic bottom-left ,
+.Ic bottom-right .
+.It Fl top
+Same as
+.Fl pos Ar top-right .
+.It Fl bottom
+Same as
+.Fl pos Ar bottom-right .
+.It Fl height Ar pixels
+Dock height.
+Default is
+.Ic auto
+from the tile tree.
+.It Fl gap Ar pixels
+Gap between cells
+.Pq default 2 .
+.It Fl override
+Override-redirect
+.Pq default .
+.It Fl managed
+Do not use override-redirect.
+.It Fl spawn
+.Xr fork 2 Ns / Ns Xr exec 3
+any tile that is not already mapped.
+.It Fl v , Fl verbose
+Log each xrandr output, the dock rectangle, and every ingest attempt
+by name
+.Pq looking for, found, ingested, or not found .
+.It Fl no-clock , Fl no-apm , Fl no-load , Fl no-console
+Skip that tile.
+.It Fl h , Fl help
+Print usage to standard error.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width PLDOCK_CONF
+.It Ev DISPLAY
+Required.
+.Nm
+exits if it is unset or empty; it never defaults a display.
+.It Ev PLDOCK_CONF
+Config path, used if
+.Fl c
+is not given.
+.El
+.Sh SIGNALS
+.Bl -tag -width SIGTERM
+.It Dv SIGINT , Dv SIGTERM
+Reparent swallowed clients back to the root at their saved position and
+size, destroy the dock, and exit.
+Clients are not killed.
+.It Dv SIGHUP
+The same spit, then re-read the config, recreate the rectangle, and
+ingest again.
+.El
+.Sh FILES
+.Bl -tag -width ~/.config/pldock/pldock.conf -compact
+.It Pa ~/.config/pldock/pldock.conf
+.It Pa ~/.pldock.conf
+.It Pa pldock.conf
+Beside the
+.Nm
+script
+.Pq used when running from a source tree .
+.El
+.Pp
+If none of those exist, a built-in copy of the default layout is used.
+An example is installed as
+.Pa /usr/local/share/examples/pldock/pldock.conf .
+.Sh EXAMPLES
+.Bd -literal -offset indent
+pldock
+pldock -v -screen HDMI-1
+pldock -c ~/pldock.conf -override
+kill -HUP $(pgrep -f pldock)
+.Ed
+.Sh SEE ALSO
+.Xr cwm 1 ,
+.Xr pldock.conf 1 ,
+.Xr wmapm 1 ,
+.Xr wmclock 1 ,
+.Xr xconsole 1 ,
+.Xr xload 1 ,
+.Xr xrandr 1
+.Sh AUTHORS
+.An Todd T. Fries Aq Mt todd@fries.net
