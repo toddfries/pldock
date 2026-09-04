@@ -301,7 +301,8 @@ sub _parse_dock {
 	my @kids;
 	while (_peek($c) ne '}' && _peek($c) ne 'EOF') {
 		if (_peek($c) eq 'WORD'
-		    && (_val($c) eq 'vbox' || _val($c) eq 'hbox' || _val($c) eq 'tile')) {
+		    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
+		        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
 			push @kids, _parse_node($c);
 		} else {
 			_parse_attr($c, $cfg);
@@ -318,7 +319,7 @@ sub _parse_dock {
 
 sub _parse_node {
 	my ($c) = @_;
-	_die($c, "expected tile, hbox, or vbox") unless _peek($c) eq 'WORD';
+	_die($c, "expected tile, plugin, hbox, or vbox") unless _peek($c) eq 'WORD';
 	my $kw = _val($c);
 	_advance($c);
 	if ($kw eq 'hbox' || $kw eq 'vbox') {
@@ -326,7 +327,8 @@ sub _parse_node {
 		my $node = { type => $kw, kids => [], stretch => 0, weight => 1 };
 		while (_peek($c) ne '}' && _peek($c) ne 'EOF') {
 			if (_peek($c) eq 'WORD'
-			    && (_val($c) eq 'vbox' || _val($c) eq 'hbox' || _val($c) eq 'tile')) {
+			    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
+			        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
 				push @{ $node->{kids} }, _parse_node($c);
 			} else {
 				_parse_attr($c, $node);
@@ -336,6 +338,34 @@ sub _parse_node {
 		_die($c, "$kw is empty") unless @{ $node->{kids} };
 		return $node;
 	}
+	if ($kw eq 'plugin') {
+		_die($c, "plugin needs a name") unless _peek($c) eq 'WORD';
+		my $name = _val($c);
+		_advance($c);
+		my $node = {
+			type      => 'plugin',
+			plugin    => $name,
+			id        => $name,
+			w         => 120,
+			h         => 57,
+			content_w => 120,
+			content_h => 57,
+			stretch   => 0,
+			weight    => 1,
+			min       => 0,
+			input     => 'disk',
+		};
+		while (_peek($c) eq 'WORD') {
+			my $w = _val($c);
+			last if $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile'
+			     || $w eq 'plugin' || $w eq 'dock';
+			_parse_attr($c, $node);
+		}
+		if ($node->{input}) {
+			$node->{id} = $name . '-' . $node->{input};
+		}
+		return $node;
+	}
 	if ($kw eq 'tile') {
 		_die($c, "tile needs a name") unless _peek($c) eq 'WORD';
 		my $name = _val($c);
@@ -343,7 +373,8 @@ sub _parse_node {
 		my $node = _tile_from_name($name);
 		while (_peek($c) eq 'WORD') {
 			my $w = _val($c);
-			last if $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile' || $w eq 'dock';
+			last if $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile'
+			     || $w eq 'plugin' || $w eq 'dock';
 			_parse_attr($c, $node);
 		}
 		return $node;
@@ -404,7 +435,8 @@ sub _parse_attr {
 	}
 	# another keyword starting a child — missing value
 	if ($type eq 'WORD'
-	    && (_val($c) eq 'vbox' || _val($c) eq 'hbox' || _val($c) eq 'tile')) {
+	    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
+	        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
 		_die($c, "attribute $key needs a value");
 	}
 	my $val = _val($c);
@@ -475,7 +507,7 @@ sub parse_dim {
 sub flatten_tiles {
 	my ($node) = @_;
 	return () unless $node;
-	if (($node->{type} || '') eq 'tile') {
+	if (($node->{type} || '') eq 'tile' || ($node->{type} || '') eq 'plugin') {
 		return $node;
 	}
 	my @out;
@@ -489,7 +521,8 @@ sub prune_tree {
 	my ($node, $skip) = @_;
 	return unless $node;
 	$skip ||= {};
-	if (($node->{type} || '') eq 'tile') {
+	if (($node->{type} || '') eq 'tile'
+	    || ($node->{type} || '') eq 'plugin') {
 		return $skip->{ $node->{id} } ? () : $node;
 	}
 	my @k;
@@ -505,7 +538,8 @@ sub preferred_size {
 	my ($node, $gap) = @_;
 	$gap = 2 unless defined $gap;
 	return (0, 0) unless $node;
-	if (($node->{type} || '') eq 'tile') {
+	if (($node->{type} || '') eq 'tile'
+	    || ($node->{type} || '') eq 'plugin') {
 		my $w = $node->{content_w} || $node->{w} || 0;
 		my $h = $node->{content_h} || $node->{h} || 0;
 		if ($node->{stretch} && $node->{min}) {
@@ -536,7 +570,8 @@ sub preferred_size {
 sub _node_flex {
 	my ($node, $parent_is_hbox) = @_;
 	return 0 unless $node;
-	if (($node->{type} || '') eq 'tile') {
+	if (($node->{type} || '') eq 'tile'
+	    || ($node->{type} || '') eq 'plugin') {
 		return $node->{stretch} ? 1 : 0;
 	}
 	return 1 if $node->{stretch};
@@ -561,7 +596,8 @@ sub _layout_node {
 	my ($node, $x, $y, $w, $h, $gap) = @_;
 	$w = 1 if $w < 1;
 	$h = 1 if $h < 1;
-	if (($node->{type} || '') eq 'tile') {
+	if (($node->{type} || '') eq 'tile'
+	    || ($node->{type} || '') eq 'plugin') {
 		if ($node->{stretch}) {
 			$node->{x} = $x;
 			$node->{y} = $y;
@@ -972,7 +1008,9 @@ sub run {
 		reap     => 0,
 		ours     => {},
 		by_win   => {},
+		plugin_win => {},
 		slots    => [],
+		plugin_tick => 0,
 		xfd      => fileno($X->connection->fh),
 		WM_NAME  => $X->atom('WM_NAME'),
 		WM_CLASS => $X->atom('WM_CLASS'),
@@ -1030,6 +1068,11 @@ sub run {
 			    && time() - ($state{last_scan} || 0) >= 1) {
 				$state{last_scan} = time();
 				_scan_for_clients(\%state);
+			}
+
+			if (time() - ($state{plugin_tick} || 0) >= 1) {
+				$state{plugin_tick} = time();
+				_plugin_tick(\%state);
 			}
 
 			my $rin = "";
@@ -1179,21 +1222,157 @@ sub _create_session {
 	$st->{last_scan}   = 0;
 
 	_relayout($st);
+	_start_plugins($st);
 	_scan_for_clients($st);
 	_spawn_missing($st) if $st->{spawn};
 }
 
+sub _plugin_gcs {
+	my ($st, $win) = @_;
+	my $X = $st->{X};
+	unless ($st->{plugin_font}) {
+		my $fid = $X->new_rsrc;
+		eval { $X->OpenFont($fid, '6x13') };
+		if ($@) {
+			eval { $X->OpenFont($fid, 'fixed') };
+		}
+		$st->{plugin_font} = $@ ? undef : $fid;
+	}
+	my %gcopt = (
+		foreground => $st->{X}->white_pixel,
+		background => $st->{black},
+		graphics_exposures => 0,
+	);
+	$gcopt{font} = $st->{plugin_font} if $st->{plugin_font};
+	my $fg = $X->new_rsrc;
+	$X->CreateGC($fg, $win, %gcopt);
+	my $bg = $X->new_rsrc;
+	$X->CreateGC($bg, $win, foreground => $st->{black}, graphics_exposures => 0);
+	my $ga = $X->new_rsrc;
+	$X->CreateGC($ga, $win,
+		foreground => 0x66CC66, background => $st->{black},
+		graphics_exposures => 0);
+	my $gb = $X->new_rsrc;
+	$X->CreateGC($gb, $win,
+		foreground => 0xCCCC44, background => $st->{black},
+		graphics_exposures => 0);
+	return { fg => $fg, bg => $bg, a => $ga, b => $gb };
+}
+
+sub _start_plugins {
+	my ($st) = @_;
+	my $X = $st->{X};
+	require Pldock::Plugin;
+	for my $s (@{ $st->{slots} }) {
+		next unless ($s->{type} || '') eq 'plugin';
+		my $obj;
+		eval {
+			$obj = Pldock::Plugin::load($s->{plugin},
+				input => $s->{input} || 'disk');
+		};
+		if ($@ || !$obj) {
+			print STDERR "pldock: plugin $s->{plugin}: $@";
+			next;
+		}
+		my $win = $X->new_rsrc;
+		my $pw = $s->{w} || $s->{slot_w} || 120;
+		my $ph = $s->{h} || $s->{slot_h} || 57;
+		my $px = $s->{x} || 0;
+		my $py = $s->{y} || 0;
+		$X->CreateWindow(
+			$win, $st->{dock}, 'InputOutput', $st->{depth},
+			'CopyFromParent',
+			$px, $py, ($pw > 0 ? $pw : 1), ($ph > 0 ? $ph : 1), 0,
+			background_pixel => $st->{black},
+			border_pixel     => $st->{black},
+			event_mask       => $X->pack_event_mask(
+				qw(Exposure ButtonPress ButtonRelease StructureNotify)
+			),
+		);
+		$X->MapWindow($win);
+		$s->{obj}        = $obj;
+		$s->{swallowed}  = $win;
+		$s->{is_plugin}  = 1;
+		$s->{gcs}        = _plugin_gcs($st, $win);
+		$st->{ours}{$win} = 1;
+		$st->{by_win}{$win} = $s;
+		$st->{plugin_win}{$win} = $s;
+		_v($st, "plugin $s->{id} window 0x" . sprintf('%x', $win));
+		eval { $obj->sample };
+		eval { $obj->draw($X, $win, $s->{gcs}, $pw, $ph) };
+	}
+}
+
+sub _plugin_tick {
+	my ($st) = @_;
+	my $X = $st->{X};
+	for my $s (@{ $st->{slots} || [] }) {
+		next unless $s->{is_plugin} && $s->{obj} && $s->{swallowed};
+		eval { $s->{obj}->sample };
+		eval {
+			$s->{obj}->draw($X, $s->{swallowed}, $s->{gcs},
+				$s->{w} || 1, $s->{h} || 1);
+		};
+	}
+}
+
+sub _plugin_event {
+	my ($st, $ev) = @_;
+	my $w = $ev->{window} // 0;
+	my $s = $st->{plugin_win}{$w} or return 0;
+	my $name = $ev->{name} // '';
+	if ($name eq 'Expose') {
+		return 1 if ($ev->{count} // 0) != 0;
+		eval {
+			$s->{obj}->draw($st->{X}, $w, $s->{gcs},
+				$s->{w} || 1, $s->{h} || 1);
+		};
+		return 1;
+	}
+	if ($name eq 'ButtonRelease') {
+		my $x = $ev->{event_x} // $ev->{x} // 0;
+		my $y = $ev->{event_y} // $ev->{y} // 0;
+		if ($s->{obj} && $s->{obj}->click($x, $y, $s->{w} || 1, $s->{h} || 1)) {
+			eval { $s->{obj}->sample };
+			eval {
+				$s->{obj}->draw($st->{X}, $w, $s->{gcs},
+					$s->{w} || 1, $s->{h} || 1);
+			};
+		}
+		return 1;
+	}
+	return 1;
+}
+
 sub _disarm {
 	my ($st) = @_;
+	_destroy_plugins($st);
 	_spit_all($st);
 	my $X = $st->{X} or return;
 	if ($st->{dock}) {
 		eval { $X->DestroyWindow($st->{dock}) };
 		eval { $X->GetInputFocus };
 	}
-	$st->{dock}   = undef;
-	$st->{ours}   = {};
-	$st->{by_win} = {};
+	$st->{dock}       = undef;
+	$st->{ours}       = {};
+	$st->{by_win}     = {};
+	$st->{plugin_win} = {};
+}
+
+sub _destroy_plugins {
+	my ($st) = @_;
+	my $X = $st->{X} or return;
+	for my $s (@{ $st->{slots} || [] }) {
+		next unless $s->{is_plugin};
+		my $w = $s->{swallowed} or next;
+		eval { $X->DestroyWindow($w) };
+		delete $st->{ours}{$w};
+		delete $st->{by_win}{$w};
+		delete $st->{plugin_win}{$w};
+		$s->{swallowed} = undef;
+		$s->{obj}       = undef;
+		$s->{gcs}       = undef;
+	}
 }
 
 sub _handle_event {
@@ -1201,6 +1380,8 @@ sub _handle_event {
 	my $name = $ev->{name} // "";
 	my $X = $st->{X};
 	my $dock = $st->{dock};
+
+	return if _plugin_event($st, $ev);
 
 	if ($name eq 'Expose') {
 		return unless $dock && ($ev->{window} // 0) == $dock;
@@ -1325,6 +1506,12 @@ sub _relayout {
 				border_width => 0,
 			);
 		}
+		if ($s->{is_plugin} && $s->{obj}) {
+			eval {
+				$s->{obj}->draw($X, $s->{swallowed}, $s->{gcs},
+					$s->{w} || 1, $s->{h} || 1);
+			};
+		}
 	}
 	$X->GetInputFocus;
 }
@@ -1334,6 +1521,7 @@ sub _spawn_missing {
 	return unless $st->{spawn};
 	my $now = time();
 	for my $s (@{ $st->{slots} }) {
+		next if ($s->{type} || '') eq 'plugin';
 		next if $s->{swallowed};
 		next if $s->{pid} && kill(0, $s->{pid});
 		if ($s->{fails} && $s->{fails} >= RESPAWN_MAX) {
@@ -1434,6 +1622,7 @@ sub _scan_for_clients {
 	my @cands = _candidate_windows($st);
 	for my $s (@{ $st->{slots} }) {
 		next if $s->{swallowed};
+		next if ($s->{type} || '') eq 'plugin';
 		my $want = join ",", @{ $s->{match} || [] };
 		_v($st, "looking for $s->{id} name=$want");
 		my $hit;
@@ -1582,6 +1771,7 @@ sub _spit_all {
 
 sub _spit_slot {
 	my ($st, $s) = @_;
+	return if $s->{is_plugin};
 	my $win = $s->{swallowed} or return;
 	my $X = $st->{X};
 	my $root = $st->{root};

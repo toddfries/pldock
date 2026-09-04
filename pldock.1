@@ -43,12 +43,21 @@ already-mapped clients into it using Perl
 It is a small Perl dock in the same style as xtomato's
 .Nm plxmessage :
 no toolkit.
-Default tiles are
+Default swallow tiles are
 .Nm wmclock ,
 .Nm wmapm ,
 .Nm xload ,
 and
 .Nm xconsole .
+A
+.Ic plugin
+line in
+.Xr pldock.conf 1
+opens a child window owned by
+.Nm
+instead of swallowing a foreign client; see
+.Ic xloadio
+there.
 .Pp
 Geometry is relative to one
 .Xr xrandr 1

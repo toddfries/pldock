@@ -35,7 +35,7 @@ my $file = File::Spec->catfile(dirname(File::Spec->rel2abs($0)), '..', 'pldock.c
 ok(-f $file, 'shipped pldock.conf');
 my $from_file = Pldock::load_conf($file);
 is($from_file->{pos}, 'bottom-right', 'file pos');
-is(scalar Pldock::flatten_tiles($from_file->{root}), 4, 'file four tiles');
+is(scalar Pldock::flatten_tiles($from_file->{root}), 5, 'file clock apm disk net console');
 
 my $nested = Pldock::parse_conf_text(<<'C', 't');
 dock {

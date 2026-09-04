@@ -15,11 +15,17 @@ clean:
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -d $(DESTDIR)$(PREFIX)/libdata/perl5/site_perl
+	install -d $(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock
+	install -d $(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin
 	install -d $(DESTDIR)$(PREFIX)/share/examples/pldock
 	install -d $(DESTDIR)$(MANDIR)/man1
 	install -m 755 pldock $(DESTDIR)$(PREFIX)/bin/pldock
 	install -m 644 lib/Pldock.pm \
 		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock.pm
+	install -m 644 lib/Pldock/Plugin.pm \
+		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin.pm
+	install -m 644 lib/Pldock/Plugin/Xloadio.pm \
+		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin/Xloadio.pm
 	install -m 644 pldock.conf \
 		$(DESTDIR)$(PREFIX)/share/examples/pldock/pldock.conf
 	install -m 644 pldock.1 $(DESTDIR)$(MANDIR)/man1/pldock.1

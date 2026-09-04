@@ -109,7 +109,7 @@ Leftover height goes to
 children.
 Boxes may nest arbitrarily.
 .It Ic tile Ar name
-Swallow a client.
+Swallow an existing client.
 .Ar name
 looks up a built-in
 .Pq Ic wmclock , Ic wmapm , Ic xload , Ic xconsole
@@ -123,6 +123,14 @@ Matching also uses the last path component, so
 .Pa /usr/local/bin/wmapm
 matches
 .Ic wmapm .
+.It Ic plugin Ar name
+Open a child window owned by
+.Xr pldock 1
+and draw into it.
+Does not swallow or spawn a foreign client.
+The first plugin is
+.Ic xloadio
+.Pq an xload-style strip chart .
 .El
 .Pp
 Tile flags and attributes:
@@ -149,7 +157,50 @@ patterns
 .Pq default: the tile name .
 .It Ic size= Ns Ar WxH
 Native size hint before the window maps.
+.It Ic input= Ns Ar disk | net
+For
+.Ic plugin xloadio :
+.Ic disk
+graphs read/write bytes;
+.Ic net
+graphs receive/send bytes.
+Default
+.Ic disk .
 .El
+.Sh PLUGINS
+.Ss xloadio
+Looks like
+.Xr xload 1
+but the two traces are a pair of counters, not load average.
+.Bl -tag -width disk
+.It disk
+Read and write bytes from
+.Dv hw.diskstats .
+The default view
+.Ic total
+sums unique devices: softraid logical volumes
+.Pq dmesg lines containing OPENBSD, SR
+plus disks that are not the backing store of those volumes
+.Pq a physical disk whose read/write totals match a softraid volume is skipped so RAID+member I/O is not counted twice .
+.It net
+Receive and send bytes from
+.Nm netstat Fl ibn
+link rows, skipping
+.Ic lo* ,
+.Ic enc* ,
+and
+.Ic pflog* .
+.Ic total
+sums the rest.
+.El
+.Pp
+A tiny
+.Ql <
+on the left edge and
+.Ql >
+on the right edge cycle
+.Ic total
+then each volume or interface.
 .Sh SEARCH PATH
 .Xr pldock 1
 loads the first file that exists:
@@ -193,7 +244,8 @@ dock {
 		hbox {
 			tile wmclock
 			tile wmapm
-			tile xload stretch
+			plugin xloadio input=disk stretch
+			plugin xloadio input=net stretch
 		}
 		tile xconsole stretch min=96
 	}
@@ -212,9 +264,25 @@ dock {
 		hbox {
 			tile wmclock
 			tile wmapm
-			tile xload stretch
+			plugin xloadio input=disk stretch
+			plugin xloadio input=net stretch
 		}
 		tile xconsole stretch min=96
+	}
+}
+.Ed
+.Pp
+A dock that is only the two I/O charts:
+.Bd -literal -offset indent
+dock {
+	pos     bottom-right
+	screen  primary
+	width   1/4
+	height  64
+
+	hbox {
+		plugin xloadio input=disk stretch
+		plugin xloadio input=net stretch
 	}
 }
 .Ed

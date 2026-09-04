@@ -92,4 +92,5 @@ a few respawns.
 | `pldock.conf` | default layout |
 | `pldock.conf.1` | mandoc for the layout language |
 | `lib/Pldock.pm` | dock + swallow + conf |
+| `lib/Pldock/Plugin/` | dock-owned drawing plugins (`xloadio`) |
 | `t/` | layout / conf / WM_CLASS (no live X) |
