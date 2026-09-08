@@ -214,7 +214,28 @@ History strip, overlapping traces
 Current values as side-by-side bars with 1 pixel of background between them.
 .It Ic style=stack
 Stacked segments
-.Pq default for mem; history columns or a RAM column beside a swap column .
+.Pq default for mem; RAM column beside swap, or ram-only / swap-only .
+.It Ic style=lanes
+One horizontal lane per series
+.Pq 1/5/15 for load
+with 1 pixel of background between lanes and groups of 4 samples
+separated by 2 blank pixels.
+Default
+.Ic freq
+is one quarter of a second.
+.It Ic freq= Ns Ar seconds
+Sample period.
+Defaults:
+.Ic 1
+for disk, net, load
+.Pq line/bar/stack
+and mem;
+.Ic 0.25
+for
+.Ic style=lanes .
+Fractions such as
+.Ic 1/4
+are accepted.
 .It Ic color0 , Ic color1 , Ic color2 , ...
 Per-trace color:
 .Ic green ,
@@ -248,8 +269,12 @@ then each volume or interface for disk/net,
 for load, and
 .Ic both Ns / Ns Ic ram Ns / Ns Ic swap
 for mem.
+Disk and net keep a screen of history per member so flipping
+.Ic total
+and a device does not wipe the graph.
 .Bd -literal -offset indent
 plugin xloadio input=load style=line color0=green color1=yellow color2=red stretch
+plugin xloadio input=load style=lanes freq=0.25 stretch
 plugin xloadio input=mem style=stack stretch
 plugin xloadio input=disk style=bar colors=green,yellow stretch
 .Ed

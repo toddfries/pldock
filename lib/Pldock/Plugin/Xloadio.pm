@@ -66,7 +66,11 @@ sub new {
 	my $input = lc($opt{input} || 'disk');
 	$input = 'disk' unless $input =~ /^(disk|net|load|mem)$/;
 	my $style = lc($opt{style} || '');
-	$style = $input eq 'mem' ? 'stack' : 'line' unless $style =~ /^(line|bar|stack)$/;
+	$style = $input eq 'mem' ? 'stack' : 'line'
+	  unless $style =~ /^(line|bar|stack|lanes)$/;
+	my $freq = $opt{freq};
+	$freq = default_freq($input, $style) unless defined $freq && $freq > 0;
+	$freq = 0.05 if $freq < 0.05;
 	my @colors = @{ $opt{colors} || [] };
 	@colors = map { parse_color($_) } @colors;
 	@colors = grep { defined } @colors;
@@ -76,18 +80,26 @@ sub new {
 	$names = [ qw(1 5 15) ] if $input eq 'load';
 	$names = [ qw(wired active cache free swapu swapf) ] if $input eq 'mem';
 	return bless {
-		input   => $input,
-		style   => $style,
-		idx     => 0,
-		hist    => [],
-		prev    => undef,
-		prev_t  => 0,
-		targets => [ 'total' ],
-		series  => $names,
-		colors  => \@colors,
-		ncpu    => _sysctl_int(CTL_HW(), HW_NCPU()) || 1,
-		view    => 'both',
+		input    => $input,
+		style    => $style,
+		freq     => $freq,
+		idx      => 0,
+		hist_by  => {},
+		prev_by  => {},
+		prev_t_by=> {},
+		targets  => [ 'total' ],
+		series   => $names,
+		colors   => \@colors,
+		ncpu     => _sysctl_int(CTL_HW(), HW_NCPU()) || 1,
+		view     => 'both',
+		next_sample => 0,
 	}, $class;
+}
+
+sub default_freq {
+	my ($input, $style) = @_;
+	return 0.25 if ($style || '') eq 'lanes';
+	return 1;
 }
 
 sub input { $_[0]{input} }
@@ -109,7 +121,7 @@ sub cycle {
 	my ($self, $dir) = @_;
 	$dir = $dir < 0 ? -1 : 1;
 	if ($self->{input} eq 'load') {
-		my @st = qw(line bar stack);
+		my @st = qw(line bar stack lanes);
 		my $i = 0;
 		for my $k (0 .. $#st) { $i = $k if $st[$k] eq $self->{style} }
 		$self->{style} = $st[ ($i + $dir) % @st ];
@@ -125,8 +137,34 @@ sub cycle {
 	my $n = @{ $self->{targets} };
 	return unless $n;
 	$self->{idx} = ($self->{idx} + $dir) % $n;
-	$self->{hist} = [];
-	$self->{prev} = undef;
+}
+
+sub due {
+	my ($self) = @_;
+	my $now = time();
+	return 1 if !$self->{next_sample} || $now >= $self->{next_sample};
+	return 0;
+}
+
+sub _hist_key {
+	my ($self) = @_;
+	return 'load' if $self->{input} eq 'load';
+	return 'mem'  if $self->{input} eq 'mem';
+	my $t = $self->{targets}[ $self->{idx} ];
+	return (defined $t && length $t) ? $t : 'total';
+}
+
+sub _hist {
+	my ($self) = @_;
+	my $k = $self->_hist_key;
+	$self->{hist_by}{$k} ||= [];
+	return $self->{hist_by}{$k};
+}
+
+sub _trim_hist {
+	my ($self, $arr) = @_;
+	my $cap = 400;
+	shift @$arr while @$arr > $cap;
 }
 
 # Left/right 14px strips cycle targets (disk/net), style (load), or view (mem).
@@ -150,17 +188,20 @@ sub click {
 sub sample {
 	my ($self) = @_;
 	my $now = time();
+	$self->{next_sample} = $now + ($self->{freq} || 1);
 	if ($self->{input} eq 'load') {
 		my $v = _load_values();
-		push @{ $self->{hist} }, $v;
-		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
+		my $h = $self->_hist;
+		push @$h, $v;
+		$self->_trim_hist($h);
 		$self->{cur} = $v;
 		return $v;
 	}
 	if ($self->{input} eq 'mem') {
 		my $v = _mem_values();
-		push @{ $self->{hist} }, $v;
-		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
+		my $h = $self->_hist;
+		push @$h, $v;
+		$self->_trim_hist($h);
 		$self->{cur} = $v;
 		return $v;
 	}
@@ -174,23 +215,38 @@ sub sample {
 	if ($self->{idx} >= @{ $self->{targets} }) {
 		$self->{idx} = 0;
 	}
-	my $key = $self->current_label;
+	my $key = $self->_hist_key;
 	my $pair = $vals->{$key} || { a => 0, b => 0 };
-	my $dt = $self->{prev_t} ? ($now - $self->{prev_t}) : 0;
+	my $prev = $self->{prev_by}{$key};
+	my $prev_t = $self->{prev_t_by}{$key} || 0;
+	my $dt = $prev_t ? ($now - $prev_t) : 0;
 	my $rate = [ 0, 0 ];
-	if ($dt > 0.05 && $self->{prev} && ($self->{prev_key} || '') eq $key) {
-		$rate->[0] = ($pair->{a} - $self->{prev}{a}) / $dt;
-		$rate->[1] = ($pair->{b} - $self->{prev}{b}) / $dt;
+	if ($dt > 0.05 && $prev) {
+		$rate->[0] = ($pair->{a} - $prev->{a}) / $dt;
+		$rate->[1] = ($pair->{b} - $prev->{b}) / $dt;
 		$rate->[0] = 0 if $rate->[0] < 0;
 		$rate->[1] = 0 if $rate->[1] < 0;
-		push @{ $self->{hist} }, $rate;
-		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
+		my $h = $self->_hist;
+		push @$h, $rate;
+		$self->_trim_hist($h);
 	}
-	$self->{prev}     = $pair;
-	$self->{prev_key} = $key;
-	$self->{prev_t}   = $now;
-	$self->{cur}      = $rate;
+	$self->{prev_by}{$key}   = $pair;
+	$self->{prev_t_by}{$key} = $now;
+	$self->{cur}             = $rate;
 	return $rate;
+}
+
+sub nice_ceil {
+	my ($x) = @_;
+	return 1 if !defined $x || $x <= 0;
+	my $exp = $x >= 1 ? int(log($x) / log(10)) : int(log($x) / log(10)) - 1;
+	# int(-1.2) is -1 in perl; for 0.3, log10~-0.52, int = 0, need -1
+	$exp = int(log($x) / log(10));
+	$exp-- if $x < 10 ** $exp;
+	my $pow = 10 ** $exp;
+	my $m   = $x / $pow;
+	my $n   = $m <= 1 ? 1 : $m <= 2 ? 2 : $m <= 5 ? 5 : 10;
+	return $n * $pow;
 }
 
 # --- disk ---
@@ -440,8 +496,8 @@ sub _mem_series {
 	if ($view eq 'ram') {
 		return [
 			$m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0,
-			$m->{free} || 0, $m->{other} || 0,
-		], [ qw(wired active cache free other) ];
+			$m->{free} || 0,
+		], [ qw(wired active cache free) ];
 	}
 	return [
 		$m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0,
@@ -452,21 +508,46 @@ sub _mem_series {
 # --- draw ---
 
 sub _hist_vec {
-	my ($p) = @_;
+	my ($self, $p) = @_;
 	return [] unless $p;
 	if (ref $p eq 'ARRAY') {
 		return $p;
 	}
+	if (ref $p eq 'HASH' && (exists $p->{wired} || exists $p->{npages})) {
+		my ($vec) = $self->_mem_series($p);
+		return $vec;
+	}
 	if (ref $p eq 'HASH') {
-		if (exists $p->{wired} || exists $p->{npages}) {
-			return [
-				$p->{wired} || 0, $p->{active} || 0, $p->{cache} || 0,
-				$p->{free} || 0, $p->{swapu} || 0, $p->{swapf} || 0,
-			];
-		}
 		return [ $p->{a} || 0, $p->{b} || 0 ];
 	}
 	return [];
+}
+
+sub _visible {
+	my ($self, $gw, $style) = @_;
+	my $h = $self->_hist;
+	return () unless $h && @$h;
+	$style ||= $self->{style} || 'line';
+	my $use = $gw;
+	if ($style eq 'lanes') {
+		# 4 samples + 2 blank px per group
+		my $ng = int($gw / 6);
+		$ng = 1 if $ng < 1;
+		$use = $ng * 4;
+	}
+	$use = @$h if $use > @$h;
+	return @$h[ -$use .. -1 ];
+}
+
+sub _scale_max {
+	my ($self, @pts) = @_;
+	my $max = 0;
+	for my $p (@pts) {
+		for my $v (@{ $self->_hist_vec($p) }) {
+			$max = $v if defined $v && $v > $max;
+		}
+	}
+	return nice_ceil($max);
 }
 
 sub draw {
@@ -474,6 +555,7 @@ sub draw {
 	return unless $X && $win && $w > 0 && $h > 0;
 	my $bg = $gcs->{bg};
 	my $fg = $gcs->{fg};
+	my $grid = $gcs->{grid};
 	my $series = $gcs->{series} || [ $gcs->{a}, $gcs->{b} ];
 	$X->PolyFillRectangle($win, $bg, [ 0, 0, $w, $h ]) if $bg;
 	my $left  = 12;
@@ -484,10 +566,13 @@ sub draw {
 	return if $gw < 4 || $gh < 4;
 
 	my $style = $self->{style} || 'line';
+	_draw_grid($X, $win, $grid, $left, $top, $gw, $gh) if $grid && $style ne 'lanes';
 	if ($style eq 'bar') {
 		_draw_bars($self, $X, $win, $series, $left, $top, $gw, $gh);
 	} elsif ($style eq 'stack') {
 		_draw_stack($self, $X, $win, $series, $left, $top, $gw, $gh);
+	} elsif ($style eq 'lanes') {
+		_draw_lanes($self, $X, $win, $series, $grid, $left, $top, $gw, $gh);
 	} else {
 		_draw_line($self, $X, $win, $series, $left, $top, $gw, $gh);
 	}
@@ -503,24 +588,23 @@ sub draw {
 	}
 }
 
+sub _draw_grid {
+	my ($X, $win, $grid, $left, $top, $gw, $gh) = @_;
+	return unless $grid && $gh > 8;
+	for my $d (1 .. 3) {
+		my $y = $top + $gh - int($gh * $d / 4);
+		$X->PolyLine($win, $grid, 'Origin', $left, $y, $left + $gw, $y);
+	}
+}
+
 sub _draw_line {
 	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
-	my @hist = @{ $self->{hist} || [] };
+	my @hist = $self->_visible($gw, 'line');
 	return unless @hist;
-	my $max = 1;
-	if ($self->{input} eq 'load') {
-		$max = $self->{ncpu} || 1;
-	}
-	for my $p (@hist) {
-		for my $v (@{ _hist_vec($p) }) {
-			$max = $v if $v && $v > $max;
-		}
-	}
-	my $n = @hist;
-	my $use = $n < $gw ? $n : $gw;
-	my $off = $n - $use;
-	for my $i (0 .. $use - 1) {
-		my $vec = _hist_vec($hist[ $off + $i ]);
+	my $max = $self->_scale_max(@hist);
+	$max = 1 if $max <= 0;
+	for my $i (0 .. $#hist) {
+		my $vec = $self->_hist_vec($hist[$i]);
 		my $x = $left + $i;
 		for my $j (0 .. $#$vec) {
 			my $gc = $series->[$j] or next;
@@ -536,24 +620,19 @@ sub _draw_line {
 # Side-by-side bars, 1px background between entries.
 sub _draw_bars {
 	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
-	my $vec = _hist_vec($self->{cur} || $self->{hist}[-1]);
+	my $vec = $self->_hist_vec($self->{cur} || ($self->_hist)->[-1]);
 	return unless @$vec;
 	my $n = @$vec;
 	my $gap = 1;
 	my $bw = int(($gw - ($n - 1) * $gap) / $n);
 	$bw = 1 if $bw < 1;
-	my $max = 1;
-	if ($self->{input} eq 'load') {
-		$max = $self->{ncpu} || 1;
-	}
-	for my $v (@$vec) {
-		$max = $v if $v && $v > $max;
-	}
+	my $max = $self->_scale_max($self->{cur} || ($self->_hist)->[-1]);
 	if ($self->{input} eq 'mem') {
 		my $sum = 0;
 		$sum += $_ for @$vec;
-		$max = $sum if $sum > $max;
+		$max = $sum if $sum > 0;
 	}
+	$max = 1 if $max <= 0;
 	for my $j (0 .. $#$vec) {
 		my $gc = $series->[$j] or next;
 		my $hv = int($gh * ($vec->[$j] || 0) / $max);
@@ -564,34 +643,85 @@ sub _draw_bars {
 	}
 }
 
-# Stacked bars: each history column is segments, 1px wide; current-only
-# uses the full width as one stack (or ram|swap columns with 1px gap).
+# Stacked bars. mem both = RAM | SWAP. mem ram / mem swap = that stack only.
 sub _draw_stack {
 	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
-	my @hist = @{ $self->{hist} || [] };
-	if ($self->{input} eq 'mem' && ($self->{view} || '') eq 'both' && @hist) {
-		# Two stacks: RAM (wired/active/cache/free) | SWAP (used/free)
+	my $view = $self->{view} || 'both';
+	if ($self->{input} eq 'mem') {
 		my $m = $self->{cur} || {};
-		my $mid = int($gw / 2);
+		if ($view eq 'both') {
+			my $mid = int($gw / 2);
+			_fill_stack($X, $win, $series,
+				[ $m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0, $m->{free} || 0 ],
+				$left, $top, ($mid > 1 ? $mid - 1 : 1), $gh);
+			_fill_stack($X, $win, [ $series->[4], $series->[5] ],
+				[ $m->{swapu} || 0, $m->{swapf} || 0 ],
+				$left + $mid + 1, $top, $gw - $mid - 1, $gh);
+			return;
+		}
+		if ($view eq 'swap') {
+			_fill_stack($X, $win, [ $series->[4], $series->[5] ],
+				[ $m->{swapu} || 0, $m->{swapf} || 0 ],
+				$left, $top, $gw, $gh);
+			return;
+		}
 		_fill_stack($X, $win, $series,
 			[ $m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0, $m->{free} || 0 ],
-			$left, $top, $mid - 1, $gh);
-		_fill_stack($X, $win, [ $series->[4], $series->[5] ],
-			[ $m->{swapu} || 0, $m->{swapf} || 0 ],
-			$left + $mid + 1, $top, $gw - $mid - 1, $gh);
+			$left, $top, $gw, $gh);
 		return;
 	}
+	my @hist = $self->_visible($gw, 'stack');
 	if (@hist > 4 && $gw > 8) {
-		my $use = @hist < $gw ? scalar @hist : $gw;
-		my $off = @hist - $use;
-		for my $i (0 .. $use - 1) {
-			_fill_stack($X, $win, $series, _hist_vec($hist[ $off + $i ]),
+		for my $i (0 .. $#hist) {
+			_fill_stack($X, $win, $series, $self->_hist_vec($hist[$i]),
 				$left + $i, $top, 1, $gh);
 		}
 		return;
 	}
-	_fill_stack($X, $win, $series, _hist_vec($self->{cur} || $hist[-1]),
+	_fill_stack($X, $win, $series, $self->_hist_vec($self->{cur} || $hist[-1]),
 		$left, $top, $gw, $gh);
+}
+
+# Three (or N) horizontal lanes, 1px blank between lanes, groups of 4
+# samples with 2px blank between groups.
+sub _draw_lanes {
+	my ($self, $X, $win, $series, $grid, $left, $top, $gw, $gh) = @_;
+	my @hist = $self->_visible($gw, 'lanes');
+	return unless @hist;
+	my $nser = 0;
+	for my $p (@hist) {
+		my $n = @{ $self->_hist_vec($p) };
+		$nser = $n if $n > $nser;
+	}
+	$nser = 3 if $self->{input} eq 'load' && $nser < 3;
+	return unless $nser;
+	my $lane_gap = 1;
+	my $lane_h = int(($gh - ($nser - 1) * $lane_gap) / $nser);
+	return if $lane_h < 2;
+	my $max = $self->_scale_max(@hist);
+	$max = 1 if $max <= 0;
+	for my $j (0 .. $nser - 1) {
+		my $ly = $top + $j * ($lane_h + $lane_gap);
+		if ($grid) {
+			for my $d (1 .. 3) {
+				my $y = $ly + $lane_h - int($lane_h * $d / 4);
+				$X->PolyLine($win, $grid, 'Origin',
+					$left, $y, $left + $gw, $y);
+			}
+		}
+		for my $i (0 .. $#hist) {
+			my $vec = $self->_hist_vec($hist[$i]);
+			my $g = int($i / 4);
+			my $x = $left + $g * 6 + ($i % 4);
+			last if $x >= $left + $gw;
+			my $gc = $series->[$j] or next;
+			my $hv = int($lane_h * ($vec->[$j] || 0) / $max);
+			$hv = $lane_h if $hv > $lane_h;
+			next unless $hv > 0;
+			$X->PolyLine($win, $gc, 'Origin',
+				$x, $ly + $lane_h, $x, $ly + $lane_h - $hv);
+		}
+	}
 }
 
 sub _fill_stack {

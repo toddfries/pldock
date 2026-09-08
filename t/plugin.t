@@ -116,6 +116,8 @@ $ld->cycle(1);
 is($ld->{style}, 'bar', 'load cycle to bar');
 $ld->cycle(1);
 is($ld->{style}, 'stack', 'load cycle to stack');
+$ld->cycle(1);
+is($ld->{style}, 'lanes', 'load cycle to lanes');
 
 my $mem = Pldock::Plugin::Xloadio->new(input => 'mem');
 is($mem->{style}, 'stack', 'mem default stack');
@@ -150,5 +152,41 @@ is($mv->{wired}, 50, 'mem wired');
 is($mv->{cache}, 150, 'mem cache inactive+vnode+vtext');
 is($mv->{swapu}, 100, 'swap used');
 is($mv->{swapf}, 400, 'swap free');
+
+$mem->{view} = 'swap';
+is_deeply($mem->_hist_vec({
+	wired => 1, active => 2, cache => 3, free => 4, swapu => 10, swapf => 20,
+}), [ 10, 20 ], 'swap view is swap only');
+$mem->{view} = 'ram';
+is_deeply($mem->_hist_vec({
+	wired => 1, active => 2, cache => 3, free => 4, swapu => 10, swapf => 20,
+}), [ 1, 2, 3, 4 ], 'ram view is ram only');
+
+is(Pldock::Plugin::Xloadio::nice_ceil(1.0), 1, 'scale 1.0');
+is(Pldock::Plugin::Xloadio::nice_ceil(0.5), 0.5, 'scale 0.5');
+is(Pldock::Plugin::Xloadio::nice_ceil(0.51), 1, 'scale 0.51 -> 1');
+
+is(Pldock::Plugin::Xloadio::default_freq('load', 'lanes'), 0.25, 'lanes freq 1/4s');
+is(Pldock::Plugin::Xloadio::default_freq('disk', 'line'), 1, 'disk freq 1s');
+
+my $dk = Pldock::Plugin::Xloadio->new(input => 'disk');
+$dk->{targets} = [ qw(total sd6) ];
+$dk->{hist_by}{total} = [ [ 1, 2 ], [ 3, 4 ] ];
+$dk->cycle(1);
+is($dk->_hist_key, 'sd6', 'flipped to member');
+$dk->cycle(-1);
+is($dk->_hist_key, 'total', 'back to total');
+is(scalar @{ $dk->_hist }, 2, 'history kept');
+
+my $fcfg = Pldock::parse_conf_text(<<'C', 'freq');
+dock {
+	hbox {
+		plugin xloadio input=load style=lanes freq=0.25 stretch
+	}
+}
+C
+my ($fl) = Pldock::flatten_tiles($fcfg->{root});
+is($fl->{style}, 'lanes', 'parse lanes');
+is($fl->{freq} + 0, 0.25, 'parse freq 0.25');
 
 done_testing();

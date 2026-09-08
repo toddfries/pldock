@@ -217,6 +217,10 @@ sub tokenize_conf {
 			push @t, [ 'SIZE', "$1x$2", $line ];
 			next;
 		}
+		if ($s =~ /\G(\d+\.\d+)/gc) {
+			push @t, [ 'NUM', $1, $line ];
+			next;
+		}
 		if ($s =~ /\G(\d+)/gc) {
 			push @t, [ 'NUM', $1, $line ];
 			next;
@@ -485,6 +489,13 @@ sub _parse_attr {
 	} elsif ($key eq 'refresh') {
 		$into->{refresh} = 0 + $val;
 		$into->{refresh} = 1 if $into->{refresh} < 1;
+	} elsif ($key eq 'freq') {
+		my $f = $val;
+		if ($f =~ /^(\d+)\/(\d+)$/ && $2) {
+			$f = $1 / $2;
+		}
+		$into->{freq} = 0 + $f;
+		$into->{freq} = 0.05 if $into->{freq} && $into->{freq} < 0.05;
 	} elsif ($key eq 'weight') {
 		$into->{weight} = 0 + $val;
 		$into->{weight} = 1 if $into->{weight} < 1;
@@ -1118,7 +1129,7 @@ sub run {
 				_scan_for_clients(\%state);
 			}
 
-			if (time() - ($state{plugin_tick} || 0) >= 1) {
+			if (time() - ($state{plugin_tick} || 0) >= 0.25) {
 				$state{plugin_tick} = time();
 				_plugin_tick(\%state);
 			}
@@ -1322,7 +1333,17 @@ sub _plugin_gcs {
 		b      => $series[1],
 		series => \@series,
 		bgpix  => $bgpix,
+		grid   => _plugin_grid_gc($X, $win, $bgpix),
 	};
+}
+
+sub _plugin_grid_gc {
+	my ($X, $win, $bgpix) = @_;
+	my $gc = $X->new_rsrc;
+	$X->CreateGC($gc, $win,
+		foreground => 0x444444, background => $bgpix,
+		graphics_exposures => 0);
+	return $gc;
 }
 
 sub _slot_colors {
@@ -1352,6 +1373,7 @@ sub _start_plugins {
 				style   => $s->{style},
 				cmd     => $s->{cmd},
 				refresh => $s->{refresh} || 300,
+				freq    => $s->{freq},
 				colors  => [ _slot_colors($s) ],
 			);
 		};
@@ -1393,7 +1415,9 @@ sub _plugin_tick {
 	my $X = $st->{X};
 	for my $s (@{ $st->{slots} || [] }) {
 		next unless $s->{is_plugin} && $s->{obj} && $s->{swallowed};
-		eval { $s->{obj}->sample };
+		if (!$s->{obj}->can('due') || $s->{obj}->due) {
+			eval { $s->{obj}->sample };
+		}
 		eval {
 			$s->{obj}->draw($X, $s->{swallowed}, $s->{gcs},
 				$s->{w} || 1, $s->{h} || 1);
