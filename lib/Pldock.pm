@@ -505,6 +505,7 @@ sub _parse_attr {
 			$into->{h} = 0 + $2;
 			$into->{content_w} = $into->{w};
 			$into->{content_h} = $into->{h};
+			$into->{size_locked} = 1;
 		} else {
 			_die($c, "size wants WxH");
 		}
@@ -522,6 +523,7 @@ sub _parse_attr {
 				$into->{h}         = 0 + $val;
 				$into->{content_h} = 0 + $val;
 			}
+			$into->{size_locked} = 1;
 		}
 	} else {
 		$into->{$key} = $val;
@@ -1879,11 +1881,19 @@ sub _swallow {
 	$slot->{restore_y} = $tr[3] if @tr >= 4;
 	$slot->{restore_w} = $geo{width}  if $geo{width};
 	$slot->{restore_h} = $geo{height} if $geo{height};
-	if (%geo && !$slot->{stretch}) {
-		$slot->{w} = $geo{width}  if $geo{width};
-		$slot->{h} = $geo{height} if $geo{height};
-		$slot->{content_w} = $slot->{w};
-		$slot->{content_h} = $slot->{h};
+	if (%geo && !$slot->{stretch} && !$slot->{size_locked}) {
+		# Dockapps often have a large X window with SHAPE punching a
+		# 54x57 hole. Using GetGeometry as the slot width leaves a
+		# black gap and squeezes stretch plugins. Honor the hint
+		# unless the real size is only a little bigger (e.g. 64x64).
+		my $gw = $geo{width}  || 0;
+		my $gh = $geo{height} || 0;
+		my $cap_w = ($slot->{content_w} || 64) + 16;
+		my $cap_h = ($slot->{content_h} || 64) + 16;
+		$slot->{w} = $gw if $gw && $gw <= $cap_w;
+		$slot->{h} = $gh if $gh && $gh <= $cap_h;
+		$slot->{content_w} = $slot->{w} if $slot->{w};
+		$slot->{content_h} = $slot->{h} if $slot->{h};
 	}
 
 	_relayout($st);

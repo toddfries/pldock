@@ -62,6 +62,7 @@ C
 	is($p[1]{w}, 56, 'second fixed width');
 	ok($p[2]{x} < 200, 'first stretch starts soon after the two 56px tiles');
 	is($p[2]{x}, 116, 'stretch starts at 56+2+56+2');
+	ok($p[0]{size_locked}, 'width= locks slot size');
 }
 
 # skip console
