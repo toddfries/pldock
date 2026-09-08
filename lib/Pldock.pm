@@ -1324,6 +1324,8 @@ sub _plugin_gcs {
 			graphics_exposures => 0);
 		push @series, $gc;
 	}
+	my $copy = $X->new_rsrc;
+	$X->CreateGC($copy, $win, graphics_exposures => 0);
 	return {
 		fg     => $fg,
 		bg     => $bg,
@@ -1332,7 +1334,57 @@ sub _plugin_gcs {
 		series => \@series,
 		bgpix  => $bgpix,
 		grid   => _plugin_grid_gc($X, $win, $bgpix),
+		copy   => $copy,
 	};
+}
+
+# Draw into a pixmap then CopyArea to the window so the user never sees
+# a cleared frame (erase-then-draw flicker).
+sub _plugin_ensure_pix {
+	my ($st, $s) = @_;
+	my $X = $st->{X};
+	my $win = $s->{swallowed} or return;
+	my $w = $s->{w} || 1;
+	my $h = $s->{h} || 1;
+	$w = 1 if $w < 1;
+	$h = 1 if $h < 1;
+	if ($s->{pix} && ($s->{pix_w} || 0) == $w && ($s->{pix_h} || 0) == $h) {
+		return $s->{pix};
+	}
+	if ($s->{pix}) {
+		eval { $X->FreePixmap($s->{pix}) };
+		$s->{pix} = undef;
+	}
+	my $pix = $X->new_rsrc;
+	$X->CreatePixmap($pix, $win, $st->{depth}, $w, $h);
+	$s->{pix}   = $pix;
+	$s->{pix_w} = $w;
+	$s->{pix_h} = $h;
+	eval {
+		$X->ChangeWindowAttributes($win, background_pixmap => $pix);
+	};
+	return $pix;
+}
+
+sub _plugin_paint {
+	my ($st, $s) = @_;
+	my $X   = $st->{X};
+	my $win = $s->{swallowed} or return;
+	my $obj = $s->{obj} or return;
+	my $w   = $s->{w} || 1;
+	my $h   = $s->{h} || 1;
+	my $pix = _plugin_ensure_pix($st, $s) or return;
+	eval { $obj->draw($X, $pix, $s->{gcs}, $w, $h) };
+	_plugin_blit($st, $s);
+}
+
+sub _plugin_blit {
+	my ($st, $s) = @_;
+	my $X   = $st->{X};
+	my $win = $s->{swallowed} or return;
+	my $pix = $s->{pix} or return;
+	my $gc  = $s->{gcs}{copy} || $s->{gcs}{fg} or return;
+	$X->CopyArea($pix, $win, $gc, 0, 0, $s->{pix_w} || 1, $s->{pix_h} || 1, 0, 0);
 }
 
 sub _plugin_grid_gc {
@@ -1403,7 +1455,7 @@ sub _start_plugins {
 		$st->{plugin_win}{$win} = $s;
 		_v($st, "plugin $s->{id} window 0x" . sprintf('%x', $win));
 		eval { $obj->sample };
-		eval { $obj->draw($X, $win, $s->{gcs}, $pw, $ph) };
+		_plugin_paint($st, $s);
 	}
 }
 
@@ -1414,11 +1466,8 @@ sub _plugin_tick {
 		next unless $s->{is_plugin} && $s->{obj} && $s->{swallowed};
 		if (!$s->{obj}->can('due') || $s->{obj}->due) {
 			eval { $s->{obj}->sample };
+			_plugin_paint($st, $s);
 		}
-		eval {
-			$s->{obj}->draw($X, $s->{swallowed}, $s->{gcs},
-				$s->{w} || 1, $s->{h} || 1);
-		};
 	}
 }
 
@@ -1430,10 +1479,11 @@ sub _plugin_event {
 	my $name = $ev->{name} // '';
 	if ($name eq 'Expose') {
 		return 1 if ($ev->{count} // 0) != 0;
-		eval {
-			$s->{obj}->draw($st->{X}, $w, $s->{gcs},
-				$s->{w} || 1, $s->{h} || 1);
-		};
+		if ($s->{pix}) {
+			_plugin_blit($st, $s);
+		} else {
+			_plugin_paint($st, $s);
+		}
 		return 1;
 	}
 	if ($name eq 'ButtonPress' || $name eq 'ButtonRelease') {
@@ -1443,10 +1493,7 @@ sub _plugin_event {
 		if ($s->{obj} && $s->{obj}->click($x, $y, $s->{w} || 1, $s->{h} || 1)) {
 			$s->{click_armed} = 1 if $name eq 'ButtonPress';
 			eval { $s->{obj}->sample };
-			eval {
-				$s->{obj}->draw($st->{X}, $w, $s->{gcs},
-					$s->{w} || 1, $s->{h} || 1);
-			};
+			_plugin_paint($st, $s);
 			$st->{X}->GetInputFocus;
 		}
 		$s->{click_armed} = 0 if $name eq 'ButtonRelease';
@@ -1476,6 +1523,10 @@ sub _destroy_plugins {
 	for my $s (@{ $st->{slots} || [] }) {
 		next unless $s->{is_plugin};
 		my $w = $s->{swallowed} or next;
+		if ($s->{pix}) {
+			eval { $X->FreePixmap($s->{pix}) };
+			$s->{pix} = undef;
+		}
 		eval { $X->DestroyWindow($w) };
 		delete $st->{ours}{$w};
 		delete $st->{by_win}{$w};
@@ -1618,10 +1669,7 @@ sub _relayout {
 			);
 		}
 		if ($s->{is_plugin} && $s->{obj}) {
-			eval {
-				$s->{obj}->draw($X, $s->{swallowed}, $s->{gcs},
-					$s->{w} || 1, $s->{h} || 1);
-			};
+			_plugin_paint($st, $s);
 		}
 	}
 	$X->GetInputFocus;
