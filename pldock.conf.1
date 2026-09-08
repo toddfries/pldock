@@ -140,7 +140,9 @@ but runs
 through
 .Nm sh Fl c
 and paints stdout in the cell.
-Default refresh is 300 seconds.
+Default
+.Ic freq
+is 300 seconds.
 .El
 .Pp
 Tile flags and attributes:
@@ -167,11 +169,18 @@ patterns
 .Pq default: the tile name .
 .It Ic size= Ns Ar WxH
 Native size hint before the window maps.
-.It Ic refresh= Ns Ar seconds
-For
-.Ic script :
-how often to re-run the command
-.Pq default 300 .
+.It Ic freq= Ns Ar seconds
+Sample period for
+.Ic plugin xloadio
+and
+.Ic script
+.Pq formerly Ic refresh
+on script .
+Defaults: 300 for script, 1 for most xloadio, 0.25 for
+.Ic style=lanes .
+Fractions such as
+.Ic 1/4
+are accepted.
 .It Ic input= Ns Ar disk | net
 For
 .Ic plugin xloadio :
@@ -223,19 +232,6 @@ separated by 2 blank pixels.
 Default
 .Ic freq
 is one quarter of a second.
-.It Ic freq= Ns Ar seconds
-Sample period.
-Defaults:
-.Ic 1
-for disk, net, load
-.Pq line/bar/stack
-and mem;
-.Ic 0.25
-for
-.Ic style=lanes .
-Fractions such as
-.Ic 1/4
-are accepted.
 .It Ic color0 , Ic color1 , Ic color2 , ...
 Per-trace color:
 .Ic green ,
@@ -364,7 +360,7 @@ hbox {
 	tile wmapm width=56
 	plugin xloadio input=disk stretch
 	plugin xloadio input=net stretch
-	script "date" refresh=300 stretch
+	script "date" freq=300 stretch
 }
 .Ed
 .Sh SEE ALSO

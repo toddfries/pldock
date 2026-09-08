@@ -22,11 +22,11 @@ sub new {
 	my ($class, %opt) = @_;
 	my $cmd = $opt{cmd};
 	$cmd = '' unless defined $cmd;
-	my $refresh = $opt{refresh} || 300;
-	$refresh = 1 if $refresh < 1;
+	my $freq = $opt{freq} || $opt{refresh} || 300;
+	$freq = 1 if $freq < 1;
 	return bless {
 		cmd      => $cmd,
-		refresh  => $refresh,
+		freq     => $freq,
 		text     => '',
 		next     => 0,
 	}, $class;
@@ -38,7 +38,7 @@ sub sample {
 	my ($self) = @_;
 	my $now = time();
 	return $self->{text} if $self->{next} && $now < $self->{next};
-	$self->{next} = $now + $self->{refresh};
+	$self->{next} = $now + $self->{freq};
 	$self->{text} = _run($self->{cmd});
 	return $self->{text};
 }

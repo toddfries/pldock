@@ -42,7 +42,7 @@ ok(Pldock::flatten_tiles($from_file->{root}) > 0, 'shipped conf has tiles');
 	my $scr = Pldock::parse_conf_text(<<'C', 'script');
 dock {
 	hbox {
-		script "date" refresh=300 stretch
+		script "date" freq=300 stretch
 		plugin xloadio input=net stretch
 	}
 }
@@ -50,7 +50,12 @@ C
 	my @s = Pldock::flatten_tiles($scr->{root});
 	is($s[0]{type}, 'script', 'script type');
 	is($s[0]{cmd}, 'date', 'script cmd');
-	is($s[0]{refresh}, 300, 'script refresh');
+	is($s[0]{freq}, 300, 'script freq');
+	my $old = Pldock::parse_conf_text(<<'C', 'refresh-alias');
+dock { hbox { script "date" refresh=60 stretch } }
+C
+	my ($os) = Pldock::flatten_tiles($old->{root});
+	is($os->{freq}, 60, 'refresh aliases to freq');
 	ok($s[0]{stretch}, 'script stretch');
 }
 

@@ -380,7 +380,7 @@ sub _parse_node {
 			plugin    => 'script',
 			id        => "script-$id",
 			cmd       => $cmd,
-			refresh   => 300,
+			freq      => 300,
 			w         => 80,
 			h         => 57,
 			content_w => 80,
@@ -486,10 +486,8 @@ sub _parse_attr {
 		$into->{match} = [ grep { length } split /,/, $val ];
 	} elsif ($key eq 'min') {
 		$into->{min} = 0 + $val;
-	} elsif ($key eq 'refresh') {
-		$into->{refresh} = 0 + $val;
-		$into->{refresh} = 1 if $into->{refresh} < 1;
-	} elsif ($key eq 'freq') {
+	} elsif ($key eq 'freq' || $key eq 'refresh') {
+		# refresh is an old name for freq (script tiles).
 		my $f = $val;
 		if ($f =~ /^(\d+)\/(\d+)$/ && $2) {
 			$f = $1 / $2;
@@ -1372,7 +1370,6 @@ sub _start_plugins {
 				input   => $s->{input} || 'disk',
 				style   => $s->{style},
 				cmd     => $s->{cmd},
-				refresh => $s->{refresh} || 300,
 				freq    => $s->{freq},
 				colors  => [ _slot_colors($s) ],
 			);
