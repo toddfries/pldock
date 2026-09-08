@@ -88,4 +88,67 @@ ok($p->click(2, 10, 100, 40), 'left <');
 ok($p->click(95, 10, 100, 40), 'right >');
 ok(!$p->click(50, 10, 100, 40), 'middle no cycle');
 
+is(Pldock::Plugin::Xloadio::parse_color('#66cc66'), 0x66cc66, 'hash color');
+is(Pldock::Plugin::Xloadio::parse_color('0xCCCC44'), 0xCCCC44, '0x color');
+is(Pldock::Plugin::Xloadio::parse_color('green'), 0x66CC66, 'named color');
+
+my $loadcfg = Pldock::parse_conf_text(<<'C', 'load');
+dock {
+	hbox {
+		plugin xloadio input=load style=bar color0=green color1=yellow color2=red stretch
+		plugin xloadio input=mem style=stack stretch
+		plugin xloadio input=disk style=bar colors=green,yellow stretch
+	}
+}
+C
+my @lp = Pldock::flatten_tiles($loadcfg->{root});
+is($lp[0]{input}, 'load', 'load input');
+is($lp[0]{style}, 'bar', 'load style bar');
+is($lp[0]{color0}, 'green', 'color0');
+is($lp[1]{input}, 'mem', 'mem input');
+is($lp[1]{style}, 'stack', 'mem stack');
+is($lp[2]{style}, 'bar', 'disk bar');
+is($lp[2]{colors}, 'green,yellow', 'colors list');
+
+my $ld = Pldock::Plugin::Xloadio->new(input => 'load', style => 'line');
+is($ld->{style}, 'line', 'load default line');
+$ld->cycle(1);
+is($ld->{style}, 'bar', 'load cycle to bar');
+$ld->cycle(1);
+is($ld->{style}, 'stack', 'load cycle to stack');
+
+my $mem = Pldock::Plugin::Xloadio->new(input => 'mem');
+is($mem->{style}, 'stack', 'mem default stack');
+is($mem->{view}, 'both', 'mem view both');
+$mem->cycle(1);
+is($mem->{view}, 'ram', 'mem cycle ram');
+
+# synthetic loadavg: 1.0 2.0 3.0 with fscale 2048
+my $lbuf = pack('I3 x4 q', 2048, 4096, 6144, 2048);
+my $lv = Pldock::Plugin::Xloadio::parse_loadavg_buf($lbuf);
+ok(abs($lv->[0] - 1.0) < 0.01, 'load 1min');
+ok(abs($lv->[1] - 2.0) < 0.01, 'load 5min');
+ok(abs($lv->[2] - 3.0) < 0.01, 'load 15min');
+
+# uvmexp: enough ints for wired/swap
+my @uv = (0) x 30;
+$uv[0] = 4096;
+$uv[3] = 1000;
+$uv[4] = 400;
+$uv[5] = 200;
+$uv[6] = 100;
+$uv[8] = 50;
+$uv[13] = 30;
+$uv[14] = 20;
+$uv[26] = 500;
+$uv[27] = 100;
+my $ub = pack('i*', @uv);
+my $mv = Pldock::Plugin::Xloadio::parse_uvmexp_buf($ub);
+is($mv->{free}, 400, 'mem free');
+is($mv->{active}, 200, 'mem active');
+is($mv->{wired}, 50, 'mem wired');
+is($mv->{cache}, 150, 'mem cache inactive+vnode+vtext');
+is($mv->{swapu}, 100, 'swap used');
+is($mv->{swapf}, 400, 'swap free');
+
 done_testing();

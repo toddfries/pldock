@@ -185,28 +185,56 @@ Default
 .Sh PLUGINS
 .Ss xloadio
 Looks like
-.Xr xload 1
-but the two traces are a pair of counters, not load average.
-.Bl -tag -width disk
-.It disk
-Read and write bytes from
+.Xr xload 1 .
+.Bl -tag -width Ds
+.It Ic input=disk
+Read and write from
 .Dv hw.diskstats .
-The default view
 .Ic total
-sums unique devices: softraid logical volumes
-.Pq dmesg lines containing OPENBSD, SR
-plus disks that are not the backing store of those volumes
-.Pq a physical disk whose read/write totals match a softraid volume is skipped so RAID+member I/O is not counted twice .
-.It net
-Receive and send bytes from
+sums unique devices
+.Pq softraid volumes, not their backing disks .
+.It Ic input=net
+Receive and send from
 .Nm netstat Fl ibn
 link rows, skipping
 .Ic lo* ,
 .Ic enc* ,
-and
 .Ic pflog* .
-.Ic total
-sums the rest.
+.It Ic input=load
+Three traces: 1, 5, and 15 minute load average, each a different color.
+.It Ic input=mem
+Stacked RAM
+.Pq wired, active, cache, free
+and swap
+.Pq used, free .
+.It Ic style=line
+History strip, overlapping traces
+.Pq default for disk, net, load .
+.It Ic style=bar
+Current values as side-by-side bars with 1 pixel of background between them.
+.It Ic style=stack
+Stacked segments
+.Pq default for mem; history columns or a RAM column beside a swap column .
+.It Ic color0 , Ic color1 , Ic color2 , ...
+Per-trace color:
+.Ic green ,
+.Ic yellow ,
+.Ic red ,
+.Ic cyan ,
+.Ic orange ,
+.Ic gray ,
+.Ic blue ,
+or
+.Li 66cc66
+/
+.Li 0x66cc66 .
+Do not use unquoted
+.Li #rrggbb
+.Pq # starts a comment ;
+quote it:
+.Ic color0="#66cc66" .
+.It Ic colors=green,yellow,red
+Same list in one attribute.
 .El
 .Pp
 A tiny
@@ -215,7 +243,16 @@ on the left edge and
 .Ql >
 on the right edge cycle
 .Ic total
-then each volume or interface.
+then each volume or interface for disk/net,
+.Ic line Ns / Ns Ic bar Ns / Ns Ic stack
+for load, and
+.Ic both Ns / Ns Ic ram Ns / Ns Ic swap
+for mem.
+.Bd -literal -offset indent
+plugin xloadio input=load style=line color0=green color1=yellow color2=red stretch
+plugin xloadio input=mem style=stack stretch
+plugin xloadio input=disk style=bar colors=green,yellow stretch
+.Ed
 .Sh SEARCH PATH
 .Xr pldock 1
 loads the first file that exists:

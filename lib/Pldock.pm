@@ -1276,7 +1276,7 @@ sub _create_session {
 }
 
 sub _plugin_gcs {
-	my ($st, $win) = @_;
+	my ($st, $win, $colors, $input) = @_;
 	my $X = $st->{X};
 	unless ($st->{plugin_font}) {
 		my $fid = $X->new_rsrc;
@@ -1286,25 +1286,55 @@ sub _plugin_gcs {
 		}
 		$st->{plugin_font} = $@ ? undef : $fid;
 	}
+	require Pldock::Plugin::Xloadio;
+	my @def = Pldock::Plugin::Xloadio::default_colors($input);
+	push @def, (0x66CC66, 0xCCCC44, 0xCC6666, 0x66CCCC, 0xCC88CC, 0x888888, 0x4488CC);
+	my @cols = @{ $colors || [] };
+	my $bgpix = Pldock::Plugin::Xloadio::parse_color($st->{cfg}{plugin_bg});
+	$bgpix = $st->{black} unless defined $bgpix;
+	my $fgpix = Pldock::Plugin::Xloadio::parse_color($st->{cfg}{plugin_fg});
+	$fgpix = $X->white_pixel unless defined $fgpix;
 	my %gcopt = (
-		foreground => $st->{X}->white_pixel,
-		background => $st->{black},
+		foreground => $fgpix,
+		background => $bgpix,
 		graphics_exposures => 0,
 	);
 	$gcopt{font} = $st->{plugin_font} if $st->{plugin_font};
 	my $fg = $X->new_rsrc;
 	$X->CreateGC($fg, $win, %gcopt);
 	my $bg = $X->new_rsrc;
-	$X->CreateGC($bg, $win, foreground => $st->{black}, graphics_exposures => 0);
-	my $ga = $X->new_rsrc;
-	$X->CreateGC($ga, $win,
-		foreground => 0x66CC66, background => $st->{black},
-		graphics_exposures => 0);
-	my $gb = $X->new_rsrc;
-	$X->CreateGC($gb, $win,
-		foreground => 0xCCCC44, background => $st->{black},
-		graphics_exposures => 0);
-	return { fg => $fg, bg => $bg, a => $ga, b => $gb };
+	$X->CreateGC($bg, $win, foreground => $bgpix, graphics_exposures => 0);
+	my @series;
+	for my $i (0 .. 6) {
+		my $c = $cols[$i];
+		$c = Pldock::Plugin::Xloadio::parse_color($c) if defined $c && $c !~ /^\d+$/;
+		$c = $def[$i] unless defined $c;
+		my $gc = $X->new_rsrc;
+		$X->CreateGC($gc, $win,
+			foreground => $c, background => $bgpix,
+			graphics_exposures => 0);
+		push @series, $gc;
+	}
+	return {
+		fg     => $fg,
+		bg     => $bg,
+		a      => $series[0],
+		b      => $series[1],
+		series => \@series,
+		bgpix  => $bgpix,
+	};
+}
+
+sub _slot_colors {
+	my ($s) = @_;
+	my @cols;
+	for my $i (0 .. 7) {
+		push @cols, $s->{"color$i"} if defined $s->{"color$i"};
+	}
+	if (!@cols && defined $s->{colors}) {
+		@cols = grep { length } split /,/, $s->{colors};
+	}
+	return @cols;
 }
 
 sub _start_plugins {
@@ -1319,8 +1349,10 @@ sub _start_plugins {
 			$obj = Pldock::Plugin::load(
 				$s->{plugin} || 'script',
 				input   => $s->{input} || 'disk',
+				style   => $s->{style},
 				cmd     => $s->{cmd},
 				refresh => $s->{refresh} || 300,
+				colors  => [ _slot_colors($s) ],
 			);
 		};
 		if ($@ || !$obj) {
@@ -1346,7 +1378,7 @@ sub _start_plugins {
 		$s->{obj}        = $obj;
 		$s->{swallowed}  = $win;
 		$s->{is_plugin}  = 1;
-		$s->{gcs}        = _plugin_gcs($st, $win);
+		$s->{gcs}        = _plugin_gcs($st, $win, [ _slot_colors($s) ], $s->{input});
 		$st->{ours}{$win} = 1;
 		$st->{by_win}{$win} = $s;
 		$st->{plugin_win}{$win} = $s;
@@ -1371,7 +1403,8 @@ sub _plugin_tick {
 
 sub _plugin_event {
 	my ($st, $ev) = @_;
-	my $w = $ev->{window} // 0;
+	# ButtonPress names the window `event`, not `window`.
+	my $w = $ev->{window} // $ev->{event} // 0;
 	my $s = $st->{plugin_win}{$w} or return 0;
 	my $name = $ev->{name} // '';
 	if ($name eq 'Expose') {
@@ -1382,16 +1415,20 @@ sub _plugin_event {
 		};
 		return 1;
 	}
-	if ($name eq 'ButtonRelease') {
-		my $x = $ev->{event_x} // $ev->{x} // 0;
-		my $y = $ev->{event_y} // $ev->{y} // 0;
+	if ($name eq 'ButtonPress' || $name eq 'ButtonRelease') {
+		return 1 if $name eq 'ButtonRelease' && $s->{click_armed};
+		my $x = $ev->{event_x} // 0;
+		my $y = $ev->{event_y} // 0;
 		if ($s->{obj} && $s->{obj}->click($x, $y, $s->{w} || 1, $s->{h} || 1)) {
+			$s->{click_armed} = 1 if $name eq 'ButtonPress';
 			eval { $s->{obj}->sample };
 			eval {
 				$s->{obj}->draw($st->{X}, $w, $s->{gcs},
 					$s->{w} || 1, $s->{h} || 1);
 			};
+			$st->{X}->GetInputFocus;
 		}
+		$s->{click_armed} = 0 if $name eq 'ButtonRelease';
 		return 1;
 	}
 	return 1;

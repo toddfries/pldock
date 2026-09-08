@@ -18,25 +18,75 @@ use strict;
 use warnings;
 use Time::HiRes qw(time);
 
-# CTL_HW / HW_DISKSTATS / HW_DISKCOUNT (sys/sysctl.h)
+# CTL_HW / HW_DISKSTATS / HW_DISKCOUNT / HW_NCPU (sys/sysctl.h)
+# CTL_VM / VM_LOADAVG / VM_UVMEXP (uvm/uvmexp.h)
 use constant CTL_HW        => 6;
 use constant HW_DISKSTATS  => 9;
 use constant HW_DISKCOUNT  => 10;
+use constant HW_NCPU       => 3;
+use constant CTL_VM        => 2;
+use constant VM_LOADAVG    => 2;
+use constant VM_UVMEXP     => 4;
 use constant SYS_sysctl    => 202;
+
+my %COLOR_NAME = (
+	green  => 0x66CC66,
+	yellow => 0xCCCC44,
+	red    => 0xCC6666,
+	cyan   => 0x66CCCC,
+	orange => 0xCC8844,
+	gray   => 0x888888,
+	grey   => 0x888888,
+	blue   => 0x4488CC,
+	magenta=> 0xCC66CC,
+	white  => 0xFFFFFF,
+	black  => 0x000000,
+);
+
+sub parse_color {
+	my ($s) = @_;
+	return unless defined $s && length $s;
+	$s =~ s/^#//;
+	$s =~ s/^0x//i;
+	return hex($s) if $s =~ /^[0-9a-fA-F]{6}$/;
+	return $COLOR_NAME{ lc $s };
+}
+
+sub default_colors {
+	my ($input) = @_;
+	$input = '' unless defined $input;
+	return (0xCC8844, 0x66CC66, 0x66CCCC, 0x888888, 0xCC6666, 0x4488CC)
+	  if $input eq 'mem';
+	return (0x66CC66, 0xCCCC44, 0xCC6666) if $input eq 'load';
+	return (0x66CC66, 0xCCCC44);
+}
 
 sub new {
 	my ($class, %opt) = @_;
 	my $input = lc($opt{input} || 'disk');
-	$input = 'disk' unless $input eq 'disk' || $input eq 'net';
+	$input = 'disk' unless $input =~ /^(disk|net|load|mem)$/;
+	my $style = lc($opt{style} || '');
+	$style = $input eq 'mem' ? 'stack' : 'line' unless $style =~ /^(line|bar|stack)$/;
+	my @colors = @{ $opt{colors} || [] };
+	@colors = map { parse_color($_) } @colors;
+	@colors = grep { defined } @colors;
+	my $names;
+	$names = [ qw(read write) ] if $input eq 'disk';
+	$names = [ qw(recv send) ] if $input eq 'net';
+	$names = [ qw(1 5 15) ] if $input eq 'load';
+	$names = [ qw(wired active cache free swapu swapf) ] if $input eq 'mem';
 	return bless {
 		input   => $input,
-		idx     => 0,          # 0 = total
+		style   => $style,
+		idx     => 0,
 		hist    => [],
 		prev    => undef,
 		prev_t  => 0,
 		targets => [ 'total' ],
-		a_name  => $input eq 'net' ? 'recv' : 'read',
-		b_name  => $input eq 'net' ? 'send' : 'write',
+		series  => $names,
+		colors  => \@colors,
+		ncpu    => _sysctl_int(CTL_HW(), HW_NCPU()) || 1,
+		view    => 'both',
 	}, $class;
 }
 
@@ -44,6 +94,12 @@ sub input { $_[0]{input} }
 
 sub current_label {
 	my ($self) = @_;
+	if ($self->{input} eq 'load') {
+		return $self->{style};
+	}
+	if ($self->{input} eq 'mem') {
+		return $self->{view} || 'both';
+	}
 	my $t = $self->{targets}[ $self->{idx} ];
 	return $t if defined $t && length $t;
 	return 'total';
@@ -52,6 +108,20 @@ sub current_label {
 sub cycle {
 	my ($self, $dir) = @_;
 	$dir = $dir < 0 ? -1 : 1;
+	if ($self->{input} eq 'load') {
+		my @st = qw(line bar stack);
+		my $i = 0;
+		for my $k (0 .. $#st) { $i = $k if $st[$k] eq $self->{style} }
+		$self->{style} = $st[ ($i + $dir) % @st ];
+		return;
+	}
+	if ($self->{input} eq 'mem') {
+		my @v = qw(both ram swap);
+		my $i = 0;
+		for my $k (0 .. $#v) { $i = $k if $v[$k] eq ($self->{view} || 'both') }
+		$self->{view} = $v[ ($i + $dir) % @v ];
+		return;
+	}
 	my $n = @{ $self->{targets} };
 	return unless $n;
 	$self->{idx} = ($self->{idx} + $dir) % $n;
@@ -59,15 +129,18 @@ sub cycle {
 	$self->{prev} = undef;
 }
 
-# Click in the left/right 10px strips cycles targets.
+# Left/right 14px strips cycle targets (disk/net), style (load), or view (mem).
 sub click {
 	my ($self, $x, $y, $w, $h) = @_;
 	return 0 unless defined $x && $w;
-	if ($x <= 10) {
+	my $hit = 14;
+	$hit = int($w / 4) if $w < 56;
+	$hit = 8 if $hit < 8;
+	if ($x <= $hit) {
 		$self->cycle(-1);
 		return 1;
 	}
-	if ($x >= $w - 10) {
+	if ($x >= $w - $hit) {
 		$self->cycle(1);
 		return 1;
 	}
@@ -77,6 +150,20 @@ sub click {
 sub sample {
 	my ($self) = @_;
 	my $now = time();
+	if ($self->{input} eq 'load') {
+		my $v = _load_values();
+		push @{ $self->{hist} }, $v;
+		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
+		$self->{cur} = $v;
+		return $v;
+	}
+	if ($self->{input} eq 'mem') {
+		my $v = _mem_values();
+		push @{ $self->{hist} }, $v;
+		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
+		$self->{cur} = $v;
+		return $v;
+	}
 	my ($vals, $names);
 	if ($self->{input} eq 'net') {
 		($vals, $names) = _net_counters();
@@ -90,19 +177,19 @@ sub sample {
 	my $key = $self->current_label;
 	my $pair = $vals->{$key} || { a => 0, b => 0 };
 	my $dt = $self->{prev_t} ? ($now - $self->{prev_t}) : 0;
-	my $rate = { a => 0, b => 0 };
-	if ($dt > 0.05 && $self->{prev} && $self->{prev_key} eq $key) {
-		$rate->{a} = ($pair->{a} - $self->{prev}{a}) / $dt;
-		$rate->{b} = ($pair->{b} - $self->{prev}{b}) / $dt;
-		$rate->{a} = 0 if $rate->{a} < 0;
-		$rate->{b} = 0 if $rate->{b} < 0;
+	my $rate = [ 0, 0 ];
+	if ($dt > 0.05 && $self->{prev} && ($self->{prev_key} || '') eq $key) {
+		$rate->[0] = ($pair->{a} - $self->{prev}{a}) / $dt;
+		$rate->[1] = ($pair->{b} - $self->{prev}{b}) / $dt;
+		$rate->[0] = 0 if $rate->[0] < 0;
+		$rate->[1] = 0 if $rate->[1] < 0;
 		push @{ $self->{hist} }, $rate;
-		my $maxh = 240;
-		shift @{ $self->{hist} } while @{ $self->{hist} } > $maxh;
+		shift @{ $self->{hist} } while @{ $self->{hist} } > 240;
 	}
 	$self->{prev}     = $pair;
 	$self->{prev_key} = $key;
 	$self->{prev_t}   = $now;
+	$self->{cur}      = $rate;
 	return $rate;
 }
 
@@ -272,57 +359,255 @@ sub _net_counters {
 	return (\%vals, \@names);
 }
 
+# --- load ---
+
+sub parse_loadavg_buf {
+	my ($buf) = @_;
+	return [ 0, 0, 0 ] unless defined $buf && length($buf) >= 20;
+	my ($a, $b, $c, $fscale) = unpack('I3 x4 q', $buf);
+	$fscale ||= 2048;
+	return [ $a / $fscale, $b / $fscale, $c / $fscale ];
+}
+
+sub _load_values {
+	my $mib = pack('ii', CTL_VM(), VM_LOADAVG());
+	my $olen = pack('L!', 0);
+	return [ 0, 0, 0 ] unless syscall(SYS_sysctl(), $mib, 2, 0, $olen, 0, 0) == 0;
+	my $need = unpack('L!', $olen);
+	return [ 0, 0, 0 ] unless $need;
+	my $buf = "\0" x $need;
+	$olen = pack('L!', $need);
+	return [ 0, 0, 0 ] unless syscall(SYS_sysctl(), $mib, 2, $buf, $olen, 0, 0) == 0;
+	return parse_loadavg_buf($buf);
+}
+
+# --- memory ---
+# uvmexp ints: pagesize@0 npages@12 free@16 active@20 inactive@24
+# wired@32 vnodepages@52 vtextpages@56 swpages@104 swpginuse@108
+
+sub parse_uvmexp_buf {
+	my ($buf) = @_;
+	return {} unless defined $buf && length($buf) >= 112;
+	my @i = unpack('i*', $buf);
+	my $ps = $i[0] || 4096;
+	my $np = $i[3] || 0;
+	my $free = $i[4] || 0;
+	my $active = $i[5] || 0;
+	my $inactive = $i[6] || 0;
+	my $wired = $i[8] || 0;
+	my $vnode = $i[13] || 0;
+	my $vtext = $i[14] || 0;
+	my $swpages = $i[26] || 0;
+	my $swuse = $i[27] || 0;
+	my $cache = $inactive + $vnode + $vtext;
+	$cache = 0 if $cache < 0;
+	my $used = $wired + $active + $cache + $free;
+	my $other = $np > $used ? $np - $used : 0;
+	my $swfree = $swpages > $swuse ? $swpages - $swuse : 0;
+	return {
+		pagesize => $ps,
+		npages   => $np,
+		wired    => $wired,
+		active   => $active,
+		cache    => $cache,
+		free     => $free,
+		other    => $other,
+		swapu    => $swuse,
+		swapf    => $swfree,
+		swpages  => $swpages,
+	};
+}
+
+sub _mem_values {
+	my $mib = pack('ii', CTL_VM(), VM_UVMEXP());
+	my $olen = pack('L!', 0);
+	return {} unless syscall(SYS_sysctl(), $mib, 2, 0, $olen, 0, 0) == 0;
+	my $need = unpack('L!', $olen);
+	return {} unless $need;
+	my $buf = "\0" x $need;
+	$olen = pack('L!', $need);
+	return {} unless syscall(SYS_sysctl(), $mib, 2, $buf, $olen, 0, 0) == 0;
+	return parse_uvmexp_buf($buf);
+}
+
+sub _mem_series {
+	my ($self, $m) = @_;
+	$m ||= {};
+	my $view = $self->{view} || 'both';
+	if ($view eq 'swap') {
+		return [ $m->{swapu} || 0, $m->{swapf} || 0 ], [ qw(swapu swapf) ];
+	}
+	if ($view eq 'ram') {
+		return [
+			$m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0,
+			$m->{free} || 0, $m->{other} || 0,
+		], [ qw(wired active cache free other) ];
+	}
+	return [
+		$m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0,
+		$m->{free} || 0, $m->{swapu} || 0, $m->{swapf} || 0,
+	], [ qw(wired active cache free swapu swapf) ];
+}
+
 # --- draw ---
+
+sub _hist_vec {
+	my ($p) = @_;
+	return [] unless $p;
+	if (ref $p eq 'ARRAY') {
+		return $p;
+	}
+	if (ref $p eq 'HASH') {
+		if (exists $p->{wired} || exists $p->{npages}) {
+			return [
+				$p->{wired} || 0, $p->{active} || 0, $p->{cache} || 0,
+				$p->{free} || 0, $p->{swapu} || 0, $p->{swapf} || 0,
+			];
+		}
+		return [ $p->{a} || 0, $p->{b} || 0 ];
+	}
+	return [];
+}
 
 sub draw {
 	my ($self, $X, $win, $gcs, $w, $h) = @_;
 	return unless $X && $win && $w > 0 && $h > 0;
-	my $bg = $gcs->{bg} || 0;
+	my $bg = $gcs->{bg};
 	my $fg = $gcs->{fg};
-	my $ga = $gcs->{a};
-	my $gb = $gcs->{b};
+	my $series = $gcs->{series} || [ $gcs->{a}, $gcs->{b} ];
 	$X->PolyFillRectangle($win, $bg, [ 0, 0, $w, $h ]) if $bg;
-	my $left  = 10;
-	my $right = 10;
+	my $left  = 12;
+	my $right = 12;
 	my $top   = 12;
 	my $gw    = $w - $left - $right;
 	my $gh    = $h - $top - 2;
 	return if $gw < 4 || $gh < 4;
 
-	my @hist = @{ $self->{hist} || [] };
-	my $max = 1;
-	for my $p (@hist) {
-		$max = $p->{a} if $p->{a} && $p->{a} > $max;
-		$max = $p->{b} if $p->{b} && $p->{b} > $max;
-	}
-	my $n = @hist;
-	if ($n && $ga && $gb) {
-		my $use = $n < $gw ? $n : $gw;
-		my $off = $n - $use;
-		for my $i (0 .. $use - 1) {
-			my $p = $hist[ $off + $i ];
-			my $x = $left + $i;
-			my $ha = int($gh * ($p->{a} || 0) / $max);
-			my $hb = int($gh * ($p->{b} || 0) / $max);
-			$ha = $gh if $ha > $gh;
-			$hb = $gh if $hb > $gh;
-			$X->PolyLine($win, $ga, 'Origin',
-				$x, $top + $gh, $x, $top + $gh - $ha) if $ha > 0;
-			$X->PolyLine($win, $gb, 'Origin',
-				$x, $top + $gh, $x, $top + $gh - $hb) if $hb > 0;
-		}
+	my $style = $self->{style} || 'line';
+	if ($style eq 'bar') {
+		_draw_bars($self, $X, $win, $series, $left, $top, $gw, $gh);
+	} elsif ($style eq 'stack') {
+		_draw_stack($self, $X, $win, $series, $left, $top, $gw, $gh);
+	} else {
+		_draw_line($self, $X, $win, $series, $left, $top, $gw, $gh);
 	}
 
 	if ($fg) {
 		$X->PolyLine($win, $fg, 'Origin',
 			$left, $top + $gh, $left + $gw, $top + $gh);
-		my $kind = $self->{input};
-		my $lab  = $self->current_label;
-		my $txt  = "$kind $lab";
+		my $txt = $self->{input} . ' ' . $self->current_label;
 		$txt = substr($txt, 0, 24) if length $txt > 24;
 		eval { $X->ImageText8($win, $fg, $left + 2, $top - 2, $txt) };
-		eval { $X->ImageText8($win, $fg, 1, int($h / 2) + 3, '<') };
-		eval { $X->ImageText8($win, $fg, $w - 7, int($h / 2) + 3, '>') };
+		eval { $X->ImageText8($win, $fg, 2, int($h / 2) + 3, '<') };
+		eval { $X->ImageText8($win, $fg, $w - 8, int($h / 2) + 3, '>') };
+	}
+}
+
+sub _draw_line {
+	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
+	my @hist = @{ $self->{hist} || [] };
+	return unless @hist;
+	my $max = 1;
+	if ($self->{input} eq 'load') {
+		$max = $self->{ncpu} || 1;
+	}
+	for my $p (@hist) {
+		for my $v (@{ _hist_vec($p) }) {
+			$max = $v if $v && $v > $max;
+		}
+	}
+	my $n = @hist;
+	my $use = $n < $gw ? $n : $gw;
+	my $off = $n - $use;
+	for my $i (0 .. $use - 1) {
+		my $vec = _hist_vec($hist[ $off + $i ]);
+		my $x = $left + $i;
+		for my $j (0 .. $#$vec) {
+			my $gc = $series->[$j] or next;
+			my $hv = int($gh * ($vec->[$j] || 0) / $max);
+			$hv = $gh if $hv > $gh;
+			next unless $hv > 0;
+			$X->PolyLine($win, $gc, 'Origin',
+				$x, $top + $gh, $x, $top + $gh - $hv);
+		}
+	}
+}
+
+# Side-by-side bars, 1px background between entries.
+sub _draw_bars {
+	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
+	my $vec = _hist_vec($self->{cur} || $self->{hist}[-1]);
+	return unless @$vec;
+	my $n = @$vec;
+	my $gap = 1;
+	my $bw = int(($gw - ($n - 1) * $gap) / $n);
+	$bw = 1 if $bw < 1;
+	my $max = 1;
+	if ($self->{input} eq 'load') {
+		$max = $self->{ncpu} || 1;
+	}
+	for my $v (@$vec) {
+		$max = $v if $v && $v > $max;
+	}
+	if ($self->{input} eq 'mem') {
+		my $sum = 0;
+		$sum += $_ for @$vec;
+		$max = $sum if $sum > $max;
+	}
+	for my $j (0 .. $#$vec) {
+		my $gc = $series->[$j] or next;
+		my $hv = int($gh * ($vec->[$j] || 0) / $max);
+		$hv = $gh if $hv > $gh;
+		next unless $hv > 0;
+		my $x = $left + $j * ($bw + $gap);
+		$X->PolyFillRectangle($win, $gc, [ $x, $top + $gh - $hv, $bw, $hv ]);
+	}
+}
+
+# Stacked bars: each history column is segments, 1px wide; current-only
+# uses the full width as one stack (or ram|swap columns with 1px gap).
+sub _draw_stack {
+	my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
+	my @hist = @{ $self->{hist} || [] };
+	if ($self->{input} eq 'mem' && ($self->{view} || '') eq 'both' && @hist) {
+		# Two stacks: RAM (wired/active/cache/free) | SWAP (used/free)
+		my $m = $self->{cur} || {};
+		my $mid = int($gw / 2);
+		_fill_stack($X, $win, $series,
+			[ $m->{wired} || 0, $m->{active} || 0, $m->{cache} || 0, $m->{free} || 0 ],
+			$left, $top, $mid - 1, $gh);
+		_fill_stack($X, $win, [ $series->[4], $series->[5] ],
+			[ $m->{swapu} || 0, $m->{swapf} || 0 ],
+			$left + $mid + 1, $top, $gw - $mid - 1, $gh);
+		return;
+	}
+	if (@hist > 4 && $gw > 8) {
+		my $use = @hist < $gw ? scalar @hist : $gw;
+		my $off = @hist - $use;
+		for my $i (0 .. $use - 1) {
+			_fill_stack($X, $win, $series, _hist_vec($hist[ $off + $i ]),
+				$left + $i, $top, 1, $gh);
+		}
+		return;
+	}
+	_fill_stack($X, $win, $series, _hist_vec($self->{cur} || $hist[-1]),
+		$left, $top, $gw, $gh);
+}
+
+sub _fill_stack {
+	my ($X, $win, $series, $vec, $x, $top, $bw, $gh) = @_;
+	return unless $vec && @$vec && $bw > 0;
+	my $sum = 0;
+	$sum += ($_ || 0) for @$vec;
+	return unless $sum > 0;
+	my $y = $top + $gh;
+	for my $j (0 .. $#$vec) {
+		my $gc = $series->[$j] or next;
+		my $hv = int($gh * ($vec->[$j] || 0) / $sum);
+		$hv = $y - $top if $hv > $y - $top;
+		next unless $hv > 0;
+		$y -= $hv;
+		$X->PolyFillRectangle($win, $gc, [ $x, $y, $bw, $hv ]);
 	}
 }
 
