@@ -926,6 +926,7 @@ sub parse_cli_argv {
 		screen   => undef,
 		spawn    => 0,
 		verbose  => 0,
+		want_3d  => 0,
 		managed  => 0,
 		skip     => {},
 		_help    => 0,
@@ -952,6 +953,8 @@ sub parse_cli_argv {
 			$opt{screen} = $p;
 		} elsif ($a eq '-spawn') {
 			$opt{spawn} = 1;
+		} elsif ($a eq '-3d' || $a eq '--3d') {
+			$opt{want_3d} = 1;
 		} elsif ($a eq '-v' || $a eq '-verbose') {
 			$opt{verbose} = 1;
 		} elsif ($a eq '-managed') {
@@ -1003,6 +1006,7 @@ options:
   -override           override-redirect (cwm cannot select the dock)
   -managed            let the WM place/select the dock (default)
   -spawn              fork/exec tiles that are not already mapped
+  -3d, --3d           barrel-spin xloadio < > over 2s (software 3d)
   -v, -verbose        log screen pick and each ingest attempt by name
   -no-clock           do not swallow wmclock
   -no-apm             do not swallow wmapm
@@ -1082,6 +1086,7 @@ sub run {
 		NET_DOCK => $X->atom('_NET_WM_WINDOW_TYPE_DOCK'),
 		NET_STRUT => $X->atom('_NET_WM_STRUT_PARTIAL'),
 		verbose  => $opt{verbose} ? 1 : 0,
+		want_3d  => $opt{want_3d} ? 1 : 0,
 	);
 
 	$X->ChangeWindowAttributes(
@@ -1129,14 +1134,20 @@ sub run {
 				_scan_for_clients(\%state);
 			}
 
-			if (time() - ($state{plugin_tick} || 0) >= 0.25) {
+			my $spinning = grep {
+				$_->{is_plugin} && $_->{obj}
+				  && $_->{obj}->can('is_spinning')
+				  && $_->{obj}->is_spinning
+			} @{ $state{slots} || [] };
+			my $tick = $spinning ? 0.05 : 0.25;
+			if (time() - ($state{plugin_tick} || 0) >= $tick) {
 				$state{plugin_tick} = time();
 				_plugin_tick(\%state);
 			}
 
 			my $rin = "";
 			vec($rin, $fd, 1) = 1;
-			my $n = select(my $rout = $rin, undef, undef, 0.25);
+			my $n = select(my $rout = $rin, undef, undef, $tick);
 			if ($n && vec($rout, $fd, 1)) {
 				$X->handle_input;
 			}
@@ -1163,6 +1174,7 @@ sub _apply_cli_cfg {
 	$cfg->{override} = 0 if $opt->{managed};
 	$cfg->{override} = 1 if $opt->{override};
 	$cfg->{spawn} = 1 if $opt->{spawn};
+	$cfg->{want_3d} = 1 if $opt->{want_3d};
 	if ($opt->{skip} && %{ $opt->{skip} }) {
 		$cfg->{root} = prune_tree($cfg->{root}, $opt->{skip});
 	}
@@ -1271,6 +1283,7 @@ sub _create_session {
 	$st->{gap}         = $geo->{gap};
 	$st->{height_auto} = $cfg->{height_auto} ? 1 : 0;
 	$st->{spawn}       = $cfg->{spawn} ? 1 : 0;
+	$st->{want_3d}     = $cfg->{want_3d} ? 1 : 0;
 	$st->{override}    = $cfg->{override} ? 1 : 0;
 	$st->{screen}      = $screen;
 	$st->{root_w}      = $root_w;
@@ -1373,6 +1386,11 @@ sub _plugin_paint {
 	my $X   = $st->{X};
 	my $win = $s->{swallowed} or return;
 	my $obj = $s->{obj} or return;
+	if ($obj->can('is_spinning') && $obj->is_spinning) {
+		_plugin_snap_faces($st, $s) unless $s->{faces_ready};
+		_plugin_barrel($st, $s);
+		return;
+	}
 	my $w   = $s->{w} || 1;
 	my $h   = $s->{h} || 1;
 	my $pix = _plugin_ensure_pix($st, $s) or return;
@@ -1387,6 +1405,84 @@ sub _plugin_blit {
 	my $pix = $s->{pix} or return;
 	my $gc  = $s->{gcs}{copy} || $s->{gcs}{fg} or return;
 	$X->CopyArea($pix, $win, $gc, 0, 0, $s->{pix_w} || 1, $s->{pix_h} || 1, 0, 0);
+}
+
+sub _plugin_face_pix {
+	my ($st, $s, $key) = @_;
+	my $X = $st->{X};
+	my $w = $s->{w} || 1;
+	my $h = $s->{h} || 1;
+	$s->{face_pix} ||= {};
+	$s->{face_wh}  ||= {};
+	my $old = $s->{face_pix}{$key};
+	if ($old && $s->{face_wh}{$key} && $s->{face_wh}{$key} eq "$w,$h") {
+		return $old;
+	}
+	if ($old) {
+		eval { $X->FreePixmap($old) };
+	}
+	my $pix = $X->new_rsrc;
+	$X->CreatePixmap($pix, $s->{swallowed}, $st->{depth}, $w, $h);
+	$s->{face_pix}{$key} = $pix;
+	$s->{face_wh}{$key}  = "$w,$h";
+	return $pix;
+}
+
+sub _plugin_snap_faces {
+	my ($st, $s) = @_;
+	my $obj = $s->{obj} or return;
+	return unless $obj->can('face_keys');
+	my $X = $st->{X};
+	my $w = $s->{w} || 1;
+	my $h = $s->{h} || 1;
+	my $save = $obj->can('face_state') ? $obj->face_state : undef;
+	for my $key ($obj->face_keys) {
+		eval { $obj->set_face($key) };
+		my $fp = _plugin_face_pix($st, $s, $key);
+		eval { $obj->draw($X, $fp, $s->{gcs}, $w, $h) };
+	}
+	eval { $obj->restore_face($save) } if $save;
+	$s->{faces_ready} = 1;
+}
+
+sub _plugin_barrel {
+	my ($st, $s) = @_;
+	my $obj = $s->{obj};
+	require Pldock::Plugin::Barrel;
+	my $spin = $obj->{spin} or return;
+	my $now  = time();
+	my $dur  = $spin->{dur} || 2;
+	my $u    = ($now - ($spin->{t0} || $now)) / $dur;
+	if ($u >= 1) {
+		eval { $obj->finish_spin };
+		$s->{faces_ready} = 0;
+		_plugin_paint($st, $s);
+		return;
+	}
+	my $n    = $spin->{n} || 2;
+	my $from = $spin->{from} || 0;
+	my $dir  = $spin->{dir} || 1;
+	my $w    = $s->{w} || 1;
+	my $h    = $s->{h} || 1;
+	my $pix  = _plugin_ensure_pix($st, $s) or return;
+	my $X    = $st->{X};
+	my $bg   = $s->{gcs}{bg};
+	my $copy = $s->{gcs}{copy} || $s->{gcs}{fg};
+	$X->PolyFillRectangle($pix, $bg, [ 0, 0, $w, $h ]) if $bg;
+	my @faces = Pldock::Plugin::Barrel::visible_faces($from, $n, $dir, $u);
+	for my $f (@faces) {
+		my $key = $spin->{keys}[ $f->{i} ];
+		my $src = $s->{face_pix}{$key} or next;
+		my ($x0, $dw) = Pldock::Plugin::Barrel::strip($f, $w);
+		next if $dw < 1;
+		for my $dx (0 .. $dw - 1) {
+			my $sx = Pldock::Plugin::Barrel::src_col($dx, $dw, $w);
+			my $dxs = $x0 + $dx;
+			next if $dxs < 0 || $dxs >= $w;
+			$X->CopyArea($src, $pix, $copy, $sx, 0, 1, $h, $dxs, 0);
+		}
+	}
+	_plugin_blit($st, $s);
 }
 
 sub _plugin_grid_gc {
@@ -1426,6 +1522,7 @@ sub _start_plugins {
 				cmd     => $s->{cmd},
 				freq    => $s->{freq},
 				colors  => [ _slot_colors($s) ],
+				want_3d => $st->{want_3d} ? 1 : 0,
 			);
 		};
 		if ($@ || !$obj) {
@@ -1466,7 +1563,9 @@ sub _plugin_tick {
 	my $X = $st->{X};
 	for my $s (@{ $st->{slots} || [] }) {
 		next unless $s->{is_plugin} && $s->{obj} && $s->{swallowed};
-		if (!$s->{obj}->can('due') || $s->{obj}->due) {
+		if ($s->{obj}->can('is_spinning') && $s->{obj}->is_spinning) {
+			_plugin_paint($st, $s);
+		} elsif (!$s->{obj}->can('due') || $s->{obj}->due) {
 			eval { $s->{obj}->sample };
 			_plugin_paint($st, $s);
 		}
@@ -1528,6 +1627,13 @@ sub _destroy_plugins {
 		if ($s->{pix}) {
 			eval { $X->FreePixmap($s->{pix}) };
 			$s->{pix} = undef;
+		}
+		if ($s->{face_pix}) {
+			for my $fp (values %{ $s->{face_pix} }) {
+				eval { $X->FreePixmap($fp) };
+			}
+			$s->{face_pix} = {};
+			$s->{faces_ready} = 0;
 		}
 		eval { $X->DestroyWindow($w) };
 		delete $st->{ours}{$w};

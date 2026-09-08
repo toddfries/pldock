@@ -93,6 +93,8 @@ sub new {
 		ncpu     => _sysctl_int(CTL_HW(), HW_NCPU()) || 1,
 		view     => 'both',
 		next_sample => 0,
+		want_3d  => $opt{want_3d} ? 1 : 0,
+		spin     => undef,
 	}, $class;
 }
 
@@ -119,9 +121,96 @@ sub current_label {
 	return 'total';
 }
 
+sub is_spinning {
+	my ($self) = @_;
+	return $self->{spin} ? 1 : 0;
+}
+
+sub face_keys {
+	my ($self) = @_;
+	if ($self->{input} eq 'load') {
+		return qw(line bar stack lanes);
+	}
+	if ($self->{input} eq 'mem') {
+		return qw(both ram swap);
+	}
+	my $l = $self->{cycle_list} || $self->{targets} || [];
+	return @$l ? @$l : ('total');
+}
+
+sub face_state {
+	my ($self) = @_;
+	return {
+		idx   => $self->{idx},
+		style => $self->{style},
+		view  => $self->{view},
+		held  => $self->{held},
+	};
+}
+
+sub restore_face {
+	my ($self, $st) = @_;
+	return unless $st;
+	$self->{idx}   = $st->{idx};
+	$self->{style} = $st->{style};
+	$self->{view}  = $st->{view};
+	$self->{held}  = $st->{held};
+}
+
+sub set_face {
+	my ($self, $key) = @_;
+	return unless defined $key;
+	if ($self->{input} eq 'load') {
+		$self->{style} = $key;
+		return;
+	}
+	if ($self->{input} eq 'mem') {
+		$self->{view} = $key;
+		return;
+	}
+	$self->{held} = undef;
+	my @k = $self->face_keys;
+	for my $i (0 .. $#k) {
+		if ($k[$i] eq $key) {
+			$self->{idx} = $i;
+			return;
+		}
+	}
+	$self->{held} = $key;
+}
+
+sub finish_spin {
+	my ($self) = @_;
+	my $sp = delete $self->{spin} or return;
+	my $key = $sp->{keys}[ $sp->{to} ];
+	$self->set_face($key) if defined $key;
+}
+
 sub cycle {
 	my ($self, $dir) = @_;
 	$dir = $dir < 0 ? -1 : 1;
+	if ($self->{want_3d}) {
+		return if $self->{spin};
+		my @keys = $self->face_keys;
+		if (@keys >= 2) {
+			my $from = 0;
+			my $cur  = $self->current_label;
+			for my $i (0 .. $#keys) {
+				$from = $i if $keys[$i] eq $cur;
+			}
+			my $to = ($from + $dir) % @keys;
+			$self->{spin} = {
+				t0   => time(),
+				dur  => 2,
+				dir  => $dir,
+				from => $from,
+				to   => $to,
+				n    => scalar @keys,
+				keys => \@keys,
+			};
+			return;
+		}
+	}
 	if ($self->{input} eq 'load') {
 		my @st = qw(line bar stack lanes);
 		my $i = 0;
