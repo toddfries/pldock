@@ -112,7 +112,9 @@ sub current_label {
 	if ($self->{input} eq 'mem') {
 		return $self->{view} || 'both';
 	}
-	my $t = $self->{targets}[ $self->{idx} ];
+	return $self->{held} if $self->{held};
+	my $list = $self->{cycle_list} || $self->{targets} || [];
+	my $t = $list->[ $self->{idx} || 0 ];
 	return $t if defined $t && length $t;
 	return 'total';
 }
@@ -134,9 +136,79 @@ sub cycle {
 		$self->{view} = $v[ ($i + $dir) % @v ];
 		return;
 	}
-	my $n = @{ $self->{targets} };
-	return unless $n;
-	$self->{idx} = ($self->{idx} + $dir) % $n;
+	$self->{held} = undef;
+	my @t = @{ $self->{cycle_list} || $self->{targets} || [] };
+	return unless @t;
+	$self->{idx} = ($self->{idx} + $dir) % @t;
+}
+
+# A sample is "on" if any series is > 0.
+sub sample_nonzero {
+	my ($p) = @_;
+	return 0 unless $p;
+	if (ref $p eq 'ARRAY') {
+		for my $v (@$p) {
+			return 1 if $v && $v > 0;
+		}
+		return 0;
+	}
+	if (ref $p eq 'HASH') {
+		return 1 if ($p->{a} || 0) > 0 || ($p->{b} || 0) > 0;
+	}
+	return 0;
+}
+
+# More than one nonzero sample in the last $screen points (one displayed screen).
+sub hist_is_active {
+	my ($hist, $screen) = @_;
+	return 0 unless $hist && @$hist;
+	my $n = @$hist;
+	$screen ||= $n;
+	my $use = $screen < $n ? $screen : $n;
+	my $nz = 0;
+	for my $i ($n - $use .. $n - 1) {
+		$nz++ if sample_nonzero($hist->[$i]);
+		return 1 if $nz > 1;
+	}
+	return 0;
+}
+
+# total is always cycled; members only if the on-screen history is busy.
+sub live_cycle_list {
+	my ($self, $names) = @_;
+	$names ||= [];
+	my $screen = $self->{last_gw} || 80;
+	my @out = ('total');
+	my %seen = ( total => 1 );
+	for my $n (@$names) {
+		next unless defined $n && length $n;
+		next if $seen{$n}++;
+		my $h = $self->{hist_by}{$n} || [];
+		push @out, $n if hist_is_active($h, $screen);
+	}
+	return @out;
+}
+
+sub _rebuild_cycle_list {
+	my ($self, $names) = @_;
+	my $cur = $self->{held}
+	  || ($self->{cycle_list} && @{ $self->{cycle_list} }
+	      ? $self->{cycle_list}[ $self->{idx} || 0 ]
+	      : 'total');
+	my @live = $self->live_cycle_list($names);
+	$self->{cycle_list} = \@live;
+	$self->{targets}    = \@live;
+	my $found;
+	for my $i (0 .. $#live) {
+		if ($live[$i] eq $cur) {
+			$self->{idx} = $i;
+			$self->{held} = undef;
+			$found = 1;
+			last;
+		}
+	}
+	# Stay on a now-idle member until the user hits < >; then skip it.
+	$self->{held} = $cur unless $found;
 }
 
 sub due {
@@ -150,7 +222,7 @@ sub _hist_key {
 	my ($self) = @_;
 	return 'load' if $self->{input} eq 'load';
 	return 'mem'  if $self->{input} eq 'mem';
-	my $t = $self->{targets}[ $self->{idx} ];
+	my $t = $self->current_label;
 	return (defined $t && length $t) ? $t : 'total';
 }
 
@@ -211,10 +283,7 @@ sub sample {
 	} else {
 		($vals, $names) = _disk_counters();
 	}
-	$self->{targets} = [ 'total', @$names ];
-	if ($self->{idx} >= @{ $self->{targets} }) {
-		$self->{idx} = 0;
-	}
+	$self->_rebuild_cycle_list($names);
 	my $key = $self->_hist_key;
 	my $pair = $vals->{$key} || { a => 0, b => 0 };
 	my $prev = $self->{prev_by}{$key};
@@ -558,6 +627,8 @@ sub draw {
 	my $grid = $gcs->{grid};
 	my $series = $gcs->{series} || [ $gcs->{a}, $gcs->{b} ];
 	$X->PolyFillRectangle($win, $bg, [ 0, 0, $w, $h ]) if $bg;
+	$self->{last_w}  = $w;
+	$self->{last_gw} = ($w > 24) ? ($w - 24) : $w;
 	my $left  = 12;
 	my $right = 12;
 	my $top   = 12;

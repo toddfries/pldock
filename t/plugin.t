@@ -171,12 +171,28 @@ is(Pldock::Plugin::Xloadio::default_freq('disk', 'line'), 1, 'disk freq 1s');
 
 my $dk = Pldock::Plugin::Xloadio->new(input => 'disk');
 $dk->{targets} = [ qw(total sd6) ];
+$dk->{cycle_list} = [ qw(total sd6) ];
 $dk->{hist_by}{total} = [ [ 1, 2 ], [ 3, 4 ] ];
 $dk->cycle(1);
 is($dk->_hist_key, 'sd6', 'flipped to member');
 $dk->cycle(-1);
 is($dk->_hist_key, 'total', 'back to total');
 is(scalar @{ $dk->_hist }, 2, 'history kept');
+
+ok(!Pldock::Plugin::Xloadio::sample_nonzero([ 0, 0 ]), 'zero sample');
+ok(Pldock::Plugin::Xloadio::sample_nonzero([ 0, 3 ]), 'nonzero sample');
+ok(!Pldock::Plugin::Xloadio::hist_is_active([ [0,0], [0,0], [1,0] ], 10),
+	'one blip is idle');
+ok(Pldock::Plugin::Xloadio::hist_is_active([ [0,0], [1,0], [2,0] ], 10),
+	'two blips are live');
+{
+	my $io = Pldock::Plugin::Xloadio->new(input => 'disk');
+	$io->{last_gw} = 80;
+	$io->{hist_by}{enc0} = [ ([ 0, 0 ]) x 20 ];
+	$io->{hist_by}{re0}  = [ [ 0, 0 ], [ 5, 1 ], [ 3, 0 ], ([ 0, 0 ]) x 5 ];
+	my @live = $io->live_cycle_list([ qw(enc0 re0 lo0) ]);
+	is_deeply(\@live, [ qw(total re0) ], 'idle ifaces omitted from cycle');
+}
 
 my $fcfg = Pldock::parse_conf_text(<<'C', 'freq');
 dock {
