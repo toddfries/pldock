@@ -1006,7 +1006,7 @@ options:
   -override           override-redirect (cwm cannot select the dock)
   -managed            let the WM place/select the dock (default)
   -spawn              fork/exec tiles that are not already mapped
-  -3d, --3d           barrel-spin xloadio < > over 2s (software 3d)
+  -3d, --3d           OpenGL cube spin on xloadio < > (cubetest / SDL::OpenGL)
   -v, -verbose        log screen pick and each ingest attempt by name
   -no-clock           do not swallow wmclock
   -no-apm             do not swallow wmapm
@@ -1388,7 +1388,11 @@ sub _plugin_paint {
 	my $obj = $s->{obj} or return;
 	if ($obj->can('is_spinning') && $obj->is_spinning) {
 		_plugin_snap_faces($st, $s) unless $s->{faces_ready};
-		_plugin_barrel($st, $s);
+		if (_gl_ready($st)) {
+			_plugin_cube($st, $s);
+		} else {
+			_plugin_barrel($st, $s);
+		}
 		return;
 	}
 	my $w   = $s->{w} || 1;
@@ -1440,9 +1444,120 @@ sub _plugin_snap_faces {
 		eval { $obj->set_face($key) };
 		my $fp = _plugin_face_pix($st, $s, $key);
 		eval { $obj->draw($X, $fp, $s->{gcs}, $w, $h) };
+		eval {
+			my ($depth, $visual, $data) = $X->GetImage(
+				$fp, 0, 0, $w, $h, 0xFFFFFFFF, 'ZPixmap'
+			);
+			if ($data) {
+				require Pldock::Plugin::Cube;
+				$st->{x_bpp} ||= int(length($data) / ($w * $h)) || 4;
+				$s->{face_rgb}{$key} = Pldock::Plugin::Cube::ximage_to_rgb(
+					$w, $h, $data, $st->{x_bpp}
+				);
+			}
+		};
 	}
 	eval { $obj->restore_face($save) } if $save;
 	$s->{faces_ready} = 1;
+}
+
+sub _gl_ready {
+	my ($st) = @_;
+	return $st->{gl_ok} if exists $st->{gl_ok};
+	$st->{gl_ok} = 0;
+	eval { require Pldock::Plugin::Cube };
+	if ($@) {
+		_v($st, "Cube.pm: $@");
+		return 0;
+	}
+	unless (Pldock::Plugin::Cube::available()) {
+		_v($st, "SDL::OpenGL not available");
+		return 0;
+	}
+	if (Pldock::Plugin::Cube::init($st->{X})) {
+		$st->{gl_ok} = 1;
+		_v($st, "OpenGL cube ready (SDL::OpenGL / cubetest)");
+		return 1;
+	}
+	_v($st, "OpenGL init failed: " . Pldock::Plugin::Cube::last_error());
+	if ($st->{want_3d}) {
+		print STDERR "pldock: --3d OpenGL cube failed ("
+		  . (Pldock::Plugin::Cube::last_error() || 'init')
+		  . "); using software barrel\n";
+	}
+	return 0;
+}
+
+sub _plugin_put_rgb {
+	my ($st, $s, $rgb, $w, $h) = @_;
+	my $X   = $st->{X};
+	my $pix = $s->{pix} or return 0;
+	my $gc  = $s->{gcs}{copy} || $s->{gcs}{fg} or return 0;
+	require Pldock::Plugin::Cube;
+	my $bpp = $st->{x_bpp} || 4;
+	my $data = ($bpp >= 4)
+	  ? Pldock::Plugin::Cube::rgb_to_bgra($rgb, $w, $h)
+	  : $rgb;
+	eval {
+		$X->PutImage(
+			$pix, $gc, $st->{depth} || 24,
+			$w, $h, 0, 0, 0, 'ZPixmap', $data
+		);
+	};
+	return $@ ? 0 : 1;
+}
+
+sub _plugin_cube {
+	my ($st, $s) = @_;
+	my $obj  = $s->{obj};
+	my $spin = $obj->{spin} or return;
+	require Pldock::Plugin::Barrel;
+	require Pldock::Plugin::Cube;
+	my $now = time();
+	my $dur = $spin->{dur} || 2;
+	my $u   = ($now - ($spin->{t0} || $now)) / $dur;
+	if ($u >= 1) {
+		eval { $obj->finish_spin };
+		$s->{faces_ready} = 0;
+		_plugin_paint($st, $s);
+		return;
+	}
+	$u = Pldock::Plugin::Barrel::ease($u);
+	my $dir   = $spin->{dir} || 1;
+	my $angle = 90 * $dir * $u;
+	my $w     = $s->{w} || 1;
+	my $h     = $s->{h} || 1;
+	my @keys  = @{ $spin->{keys} || [] };
+	my $n     = @keys || 1;
+	my $from  = $spin->{from} || 0;
+	my @rgb;
+	for my $k (0 .. 5) {
+		my $ki;
+		if ($k == 0) {
+			$ki = $from % $n;
+		} elsif ($k == 1) {
+			$ki = ($from + 1) % $n;
+		} elsif ($k == 2) {
+			$ki = ($from + 2) % $n;
+		} elsif ($k == 3) {
+			$ki = ($from - 1) % $n;
+		}
+		if (defined $ki) {
+			$rgb[$k] = $s->{face_rgb}{ $keys[$ki] };
+		}
+	}
+	Pldock::Plugin::Cube::upload_faces($w, $h, @rgb);
+	my $frame = Pldock::Plugin::Cube::render_rgb($angle, $w, $h);
+	unless ($frame && length($frame) >= $w * $h * 3) {
+		_plugin_barrel($st, $s);
+		return;
+	}
+	_plugin_ensure_pix($st, $s);
+	unless (_plugin_put_rgb($st, $s, $frame, $w, $h)) {
+		_plugin_barrel($st, $s);
+		return;
+	}
+	_plugin_blit($st, $s);
 }
 
 sub _plugin_barrel {

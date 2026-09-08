@@ -140,15 +140,17 @@ Normal managed window
 .Xr fork 2 Ns / Ns Xr exec 3
 any tile that is not already mapped.
 .It Fl 3d , Fl -3d
-Barrel-spin
+Rotate
 .Nm xloadio
+faces as a textured OpenGL cube
+.Pq SDL::OpenGL, same path as
+.Pa cubetest
+over two seconds per
 .Ql <
 /
 .Ql >
-over two seconds: live faces sit on a drum
-.Pq software, 3dTest-style
-.Li |cos|
-squash .
+.
+Falls back to a software barrel if GL cannot be initialised.
 .It Fl v , Fl verbose
 Log each xrandr output, the dock rectangle, and every ingest attempt
 by name
