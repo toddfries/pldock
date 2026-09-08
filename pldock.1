@@ -87,13 +87,12 @@ including the last path component, so a class of
 matches tile
 .Ic wmapm .
 .Pp
-The dock is override-redirect by default so
+The dock is a normal managed window by default so
 .Xr cwm 1
-does not steal
-.Fl screen
-placement.
-.Fl managed
-lets the window manager place it.
+can select and cycle it.
+.Fl override
+makes it override-redirect
+.Pq cwm will not select it; placement is pinned .
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl c Ar file
@@ -131,10 +130,12 @@ from the tile tree.
 Gap between cells
 .Pq default 2 .
 .It Fl override
-Override-redirect
-.Pq default .
+Override-redirect.
+.Xr cwm 1
+cannot select or cycle the dock.
 .It Fl managed
-Do not use override-redirect.
+Normal managed window
+.Pq default .
 .It Fl spawn
 .Xr fork 2 Ns / Ns Xr exec 3
 any tile that is not already mapped.
@@ -171,15 +172,15 @@ ingest again.
 .Sh FILES
 .Bl -tag -width ~/.config/pldock/pldock.conf -compact
 .It Pa ~/.config/pldock/pldock.conf
-.It Pa ~/.pldock.conf
-.It Pa pldock.conf
-Beside the
-.Nm
-script
-.Pq used when running from a source tree .
+Default config.
+.Fl c
+and
+.Ev PLDOCK_CONF
+override it.
+The current directory is not searched.
 .El
 .Pp
-If none of those exist, a built-in copy of the default layout is used.
+If that file does not exist, a built-in copy of the default layout is used.
 An example is installed as
 .Pa /usr/local/share/examples/pldock/pldock.conf .
 .Sh EXAMPLES

@@ -131,6 +131,16 @@ Does not swallow or spawn a foreign client.
 The first plugin is
 .Ic xloadio
 .Pq an xload-style strip chart .
+.It Ic script Ar command
+Like
+.Ic plugin ,
+but runs
+.Ar command
+.Pq quote it if it contains spaces
+through
+.Nm sh Fl c
+and paints stdout in the cell.
+Default refresh is 300 seconds.
 .El
 .Pp
 Tile flags and attributes:
@@ -157,6 +167,11 @@ patterns
 .Pq default: the tile name .
 .It Ic size= Ns Ar WxH
 Native size hint before the window maps.
+.It Ic refresh= Ns Ar seconds
+For
+.Ic script :
+how often to re-run the command
+.Pq default 300 .
 .It Ic input= Ns Ar disk | net
 For
 .Ic plugin xloadio :
@@ -211,13 +226,6 @@ loads the first file that exists:
 .Ev PLDOCK_CONF
 .It
 .Pa ~/.config/pldock/pldock.conf
-.It
-.Pa ~/.pldock.conf
-.It
-.Pa pldock.conf
-beside the
-.Nm pldock
-script
 .El
 .Pp
 Otherwise the built-in default
@@ -284,6 +292,17 @@ dock {
 		plugin xloadio input=disk stretch
 		plugin xloadio input=net stretch
 	}
+}
+.Ed
+.Pp
+Fixed dockapps, then stretch charts and a clock script:
+.Bd -literal -offset indent
+hbox {
+	tile wmclock width=56
+	tile wmapm width=56
+	plugin xloadio input=disk stretch
+	plugin xloadio input=net stretch
+	script "date" refresh=300 stretch
 }
 .Ed
 .Sh SEE ALSO

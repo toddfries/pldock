@@ -26,6 +26,8 @@ install:
 		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin.pm
 	install -m 644 lib/Pldock/Plugin/Xloadio.pm \
 		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin/Xloadio.pm
+	install -m 644 lib/Pldock/Plugin/Script.pm \
+		$(DESTDIR)$(PREFIX)/libdata/perl5/site_perl/Pldock/Plugin/Script.pm
 	install -m 644 pldock.conf \
 		$(DESTDIR)$(PREFIX)/share/examples/pldock/pldock.conf
 	install -m 644 pldock.1 $(DESTDIR)$(MANDIR)/man1/pldock.1

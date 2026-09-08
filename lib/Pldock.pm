@@ -293,16 +293,14 @@ sub _parse_dock {
 		width       => '1/3',
 		height      => 'auto',
 		gap         => 2,
-		override    => 1,
+		override    => 0,
 		height_auto => 1,
 		screen      => 'primary',
 		spawn       => 0,
 	};
 	my @kids;
 	while (_peek($c) ne '}' && _peek($c) ne 'EOF') {
-		if (_peek($c) eq 'WORD'
-		    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
-		        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
+		if (_peek($c) eq 'WORD' && _is_item_kw(_val($c))) {
 			push @kids, _parse_node($c);
 		} else {
 			_parse_attr($c, $cfg);
@@ -319,16 +317,15 @@ sub _parse_dock {
 
 sub _parse_node {
 	my ($c) = @_;
-	_die($c, "expected tile, plugin, hbox, or vbox") unless _peek($c) eq 'WORD';
+	_die($c, "expected tile, plugin, script, hbox, or vbox")
+	  unless _peek($c) eq 'WORD';
 	my $kw = _val($c);
 	_advance($c);
 	if ($kw eq 'hbox' || $kw eq 'vbox') {
 		_expect($c, '{');
 		my $node = { type => $kw, kids => [], stretch => 0, weight => 1 };
 		while (_peek($c) ne '}' && _peek($c) ne 'EOF') {
-			if (_peek($c) eq 'WORD'
-			    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
-			        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
+			if (_peek($c) eq 'WORD' && _is_item_kw(_val($c))) {
 				push @{ $node->{kids} }, _parse_node($c);
 			} else {
 				_parse_attr($c, $node);
@@ -357,12 +354,41 @@ sub _parse_node {
 		};
 		while (_peek($c) eq 'WORD') {
 			my $w = _val($c);
-			last if $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile'
-			     || $w eq 'plugin' || $w eq 'dock';
+			last if _is_item_kw($w) || $w eq 'dock';
 			_parse_attr($c, $node);
 		}
 		if ($node->{input}) {
 			$node->{id} = $name . '-' . $node->{input};
+		}
+		return $node;
+	}
+	if ($kw eq 'script') {
+		my $pt = _peek($c);
+		_die($c, "script needs a command")
+		  unless $pt eq 'STRING' || $pt eq 'WORD';
+		my $cmd = _val($c);
+		_advance($c);
+		my $id = $cmd;
+		$id =~ s/\W+/_/g;
+		$id = 'script' unless length $id;
+		my $node = {
+			type      => 'script',
+			plugin    => 'script',
+			id        => "script-$id",
+			cmd       => $cmd,
+			refresh   => 300,
+			w         => 80,
+			h         => 57,
+			content_w => 80,
+			content_h => 57,
+			stretch   => 0,
+			weight    => 1,
+			min       => 0,
+		};
+		while (_peek($c) eq 'WORD') {
+			my $w = _val($c);
+			last if _is_item_kw($w) || $w eq 'dock';
+			_parse_attr($c, $node);
 		}
 		return $node;
 	}
@@ -373,13 +399,24 @@ sub _parse_node {
 		my $node = _tile_from_name($name);
 		while (_peek($c) eq 'WORD') {
 			my $w = _val($c);
-			last if $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile'
-			     || $w eq 'plugin' || $w eq 'dock';
+			last if _is_item_kw($w) || $w eq 'dock';
 			_parse_attr($c, $node);
 		}
 		return $node;
 	}
 	_die($c, "unknown block '$kw'");
+}
+
+sub _is_item_kw {
+	my ($w) = @_;
+	return $w eq 'vbox' || $w eq 'hbox' || $w eq 'tile'
+	    || $w eq 'plugin' || $w eq 'script';
+}
+
+sub _is_leaf {
+	my ($node) = @_;
+	my $t = $node->{type} || '';
+	return $t eq 'tile' || $t eq 'plugin' || $t eq 'script';
 }
 
 sub _tile_from_name {
@@ -434,9 +471,7 @@ sub _parse_attr {
 		_die($c, "attribute $key needs a value");
 	}
 	# another keyword starting a child — missing value
-	if ($type eq 'WORD'
-	    && (_val($c) eq 'vbox' || _val($c) eq 'hbox'
-	        || _val($c) eq 'tile' || _val($c) eq 'plugin')) {
+	if ($type eq 'WORD' && _is_item_kw(_val($c))) {
 		_die($c, "attribute $key needs a value");
 	}
 	my $val = _val($c);
@@ -447,6 +482,9 @@ sub _parse_attr {
 		$into->{match} = [ grep { length } split /,/, $val ];
 	} elsif ($key eq 'min') {
 		$into->{min} = 0 + $val;
+	} elsif ($key eq 'refresh') {
+		$into->{refresh} = 0 + $val;
+		$into->{refresh} = 1 if $into->{refresh} < 1;
 	} elsif ($key eq 'weight') {
 		$into->{weight} = 0 + $val;
 		$into->{weight} = 1 if $into->{weight} < 1;
@@ -461,9 +499,21 @@ sub _parse_attr {
 		} else {
 			_die($c, "size wants WxH");
 		}
-	} elsif ($key eq 'pos' || $key eq 'width' || $key eq 'height'
-	      || $key eq 'screen') {
+	} elsif ($key eq 'pos' || $key eq 'screen') {
 		$into->{$key} = $val;
+	} elsif ($key eq 'width' || $key eq 'height') {
+		$into->{$key} = $val;
+		# Pixel size on a leaf (tile wmclock width=56). Fractions
+		# stay as specs for the dock.
+		if ($val =~ /^\d+$/) {
+			if ($key eq 'width') {
+				$into->{w}         = 0 + $val;
+				$into->{content_w} = 0 + $val;
+			} else {
+				$into->{h}         = 0 + $val;
+				$into->{content_h} = 0 + $val;
+			}
+		}
 	} else {
 		$into->{$key} = $val;
 	}
@@ -507,7 +557,7 @@ sub parse_dim {
 sub flatten_tiles {
 	my ($node) = @_;
 	return () unless $node;
-	if (($node->{type} || '') eq 'tile' || ($node->{type} || '') eq 'plugin') {
+	if (_is_leaf($node)) {
 		return $node;
 	}
 	my @out;
@@ -521,8 +571,7 @@ sub prune_tree {
 	my ($node, $skip) = @_;
 	return unless $node;
 	$skip ||= {};
-	if (($node->{type} || '') eq 'tile'
-	    || ($node->{type} || '') eq 'plugin') {
+	if (_is_leaf($node)) {
 		return $skip->{ $node->{id} } ? () : $node;
 	}
 	my @k;
@@ -538,8 +587,7 @@ sub preferred_size {
 	my ($node, $gap) = @_;
 	$gap = 2 unless defined $gap;
 	return (0, 0) unless $node;
-	if (($node->{type} || '') eq 'tile'
-	    || ($node->{type} || '') eq 'plugin') {
+	if (_is_leaf($node)) {
 		my $w = $node->{content_w} || $node->{w} || 0;
 		my $h = $node->{content_h} || $node->{h} || 0;
 		if ($node->{stretch} && $node->{min}) {
@@ -570,8 +618,7 @@ sub preferred_size {
 sub _node_flex {
 	my ($node, $parent_is_hbox) = @_;
 	return 0 unless $node;
-	if (($node->{type} || '') eq 'tile'
-	    || ($node->{type} || '') eq 'plugin') {
+	if (_is_leaf($node)) {
 		return $node->{stretch} ? 1 : 0;
 	}
 	return 1 if $node->{stretch};
@@ -589,15 +636,14 @@ sub layout_tree {
 	my ($node, $w, $h, $gap) = @_;
 	$gap = 2 unless defined $gap;
 	return unless $node && $w > 0 && $h > 0;
-	_layout_node($node, 0, 0, $w, $h, $gap);
+	_layout_node($node, 0, 0, $w, $h, $gap, 0);
 }
 
 sub _layout_node {
-	my ($node, $x, $y, $w, $h, $gap) = @_;
+	my ($node, $x, $y, $w, $h, $gap, $in_hbox) = @_;
 	$w = 1 if $w < 1;
 	$h = 1 if $h < 1;
-	if (($node->{type} || '') eq 'tile'
-	    || ($node->{type} || '') eq 'plugin') {
+	if (_is_leaf($node)) {
 		if ($node->{stretch}) {
 			$node->{x} = $x;
 			$node->{y} = $y;
@@ -606,12 +652,21 @@ sub _layout_node {
 			$node->{slot_w} = $w;
 			$node->{slot_h} = $h;
 		} else {
+			# Pack against the start of the cell on the parent's
+			# main axis (left in an hbox, top in a vbox). Centering
+			# a 54px dockapp in a wide cell was the gap after the
+			# first fixed item.
 			my $tw = $node->{content_w} || $node->{w} || 1;
 			my $th = $node->{content_h} || $node->{h} || 1;
 			$tw = $w if $tw > $w;
 			$th = $h if $th > $h;
-			$node->{x} = $x + int(($w - $tw) / 2);
-			$node->{y} = $y + int(($h - $th) / 2);
+			if ($in_hbox) {
+				$node->{x} = $x;
+				$node->{y} = $y + int(($h - $th) / 2);
+			} else {
+				$node->{x} = $x + int(($w - $tw) / 2);
+				$node->{y} = $y;
+			}
 			$node->{w} = $tw;
 			$node->{h} = $th;
 			$node->{slot_w} = $tw;
@@ -675,9 +730,9 @@ sub _layout_node {
 		my $sz = $sz[$i] || 0;
 		$sz = 0 if $sz < 0;
 		if ($hbox) {
-			_layout_node($kids[$i], $cur, $y, $sz, $h, $gap);
+			_layout_node($kids[$i], $cur, $y, $sz, $h, $gap, 1);
 		} else {
-			_layout_node($kids[$i], $x, $cur, $w, $sz, $gap);
+			_layout_node($kids[$i], $x, $cur, $w, $sz, $gap, 0);
 		}
 		$cur += $sz + $gap;
 	}
@@ -832,15 +887,8 @@ sub find_conf_path {
 	}
 	return $ENV{PLDOCK_CONF} if defined $ENV{PLDOCK_CONF} && length $ENV{PLDOCK_CONF};
 	my $home = $ENV{HOME} // '';
-	my $here = dirname(File::Spec->rel2abs($0));
-	for my $p (
-		File::Spec->catfile($home, '.config', 'pldock', 'pldock.conf'),
-		File::Spec->catfile($home, '.pldock.conf'),
-		File::Spec->catfile($here, 'pldock.conf'),
-	  )
-	{
-		return $p if $p && -f $p;
-	}
+	my $p = File::Spec->catfile($home, '.config', 'pldock', 'pldock.conf');
+	return $p if $p && -f $p;
 	return;
 }
 
@@ -934,15 +982,15 @@ spits windows back to the root; SIGHUP reloads the config the same way.
 
 options:
   -c FILE             config file (else ~/.config/pldock/pldock.conf,
-                      ./pldock.conf, or the built-in default)
+                      or the built-in default)
   -screen NAME        xrandr output: primary, eDP-1, HDMI-1, left, right, 0
   -pos PLACE          top-left, top-right, bottom-left, bottom-right
   -top                -pos top-right
   -bottom             -pos bottom-right
   -height N           dock height in pixels (default: auto from tiles)
   -gap N              pixels between tiles
-  -override           override-redirect (default; needed so -screen sticks)
-  -managed            let the WM place the dock (disables override-redirect)
+  -override           override-redirect (cwm cannot select the dock)
+  -managed            let the WM place/select the dock (default)
   -spawn              fork/exec tiles that are not already mapped
   -v, -verbose        log screen pick and each ingest attempt by name
   -no-clock           do not swallow wmclock
@@ -1264,11 +1312,16 @@ sub _start_plugins {
 	my $X = $st->{X};
 	require Pldock::Plugin;
 	for my $s (@{ $st->{slots} }) {
-		next unless ($s->{type} || '') eq 'plugin';
+		next unless ($s->{type} || '') eq 'plugin'
+		         || ($s->{type} || '') eq 'script';
 		my $obj;
 		eval {
-			$obj = Pldock::Plugin::load($s->{plugin},
-				input => $s->{input} || 'disk');
+			$obj = Pldock::Plugin::load(
+				$s->{plugin} || 'script',
+				input   => $s->{input} || 'disk',
+				cmd     => $s->{cmd},
+				refresh => $s->{refresh} || 300,
+			);
 		};
 		if ($@ || !$obj) {
 			print STDERR "pldock: plugin $s->{plugin}: $@";
@@ -1521,7 +1574,8 @@ sub _spawn_missing {
 	return unless $st->{spawn};
 	my $now = time();
 	for my $s (@{ $st->{slots} }) {
-		next if ($s->{type} || '') eq 'plugin';
+		next if ($s->{type} || '') eq 'plugin'
+		     || ($s->{type} || '') eq 'script';
 		next if $s->{swallowed};
 		next if $s->{pid} && kill(0, $s->{pid});
 		if ($s->{fails} && $s->{fails} >= RESPAWN_MAX) {
@@ -1622,7 +1676,8 @@ sub _scan_for_clients {
 	my @cands = _candidate_windows($st);
 	for my $s (@{ $st->{slots} }) {
 		next if $s->{swallowed};
-		next if ($s->{type} || '') eq 'plugin';
+		next if ($s->{type} || '') eq 'plugin'
+		     || ($s->{type} || '') eq 'script';
 		my $want = join ",", @{ $s->{match} || [] };
 		_v($st, "looking for $s->{id} name=$want");
 		my $hit;

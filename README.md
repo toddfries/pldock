@@ -15,7 +15,7 @@ loop. There is no toolkit and no XCB twin.
 perl -Ilib -c pldock
 ./pldock
 ./pldock -override
-./pldock -c ./pldock.conf
+./pldock -c ~/.config/pldock/pldock.conf
 ```
 
 Needs `p5-X11-Protocol`. Clients are looked up on `$PATH`.
@@ -58,20 +58,14 @@ perl -Ilib -e 'print "$_->{name} $_->{w}x$_->{h}+$_->{x}+$_->{y}\n"
   for Pldock::parse_xrandr(Pldock::read_xrandr_text())'
 ```
 
-Search path: `-c FILE`, `$PLDOCK_CONF`, `~/.config/pldock/pldock.conf`,
-`~/.pldock.conf`, `pldock.conf` beside the script, then the built-in
-default.
+Config is `~/.config/pldock/pldock.conf` (or `-c FILE` / `$PLDOCK_CONF`).
+The current directory is not searched.
 
 ## cwm
 
-`~/.cwmrc` already ignores `xload` / `xconsole`. Add:
-
-```
-ignore pldock
-```
-
-The dock is **override-redirect** by default so `-screen HDMI-1` is not
-stolen by cwm. Pass `-managed` if you want the WM to place it.
+The dock is a **normal managed window** so cwm can select it. Do **not**
+add `ignore pldock` if you want to cycle to it. Pass `-override` only if
+you need the bar pinned and unselectable.
 
 ```
 ./pldock -v -screen HDMI-1

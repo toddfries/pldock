@@ -38,6 +38,32 @@ ok($by{xload}{w} > $by{wmclock}{w}, 'xload wider than clock');
 is($by{wmclock}{w}, 54, 'clock native width');
 is($by{wmapm}{w}, 54, 'apm native width');
 
+# Two fixed + three stretch: no fat cell on the first fixed item.
+{
+	my $cfg = Pldock::parse_conf_text(<<'C', 'hbox5');
+dock {
+	width 640
+	height 64
+	gap 2
+	hbox {
+		tile wmclock width=56
+		tile wmapm width=56
+		tile XLoad stretch
+		plugin xloadio input=disk stretch
+		plugin xloadio input=net stretch
+	}
+}
+C
+	Pldock::layout_tree($cfg->{root}, 640, 64, 2);
+	my @p = Pldock::flatten_tiles($cfg->{root});
+	is($p[0]{x}, 0, 'first fixed at left');
+	is($p[0]{w}, 56, 'first fixed uses width=');
+	is($p[1]{x}, 58, 'second fixed packed after first+gap');
+	is($p[1]{w}, 56, 'second fixed width');
+	ok($p[2]{x} < 200, 'first stretch starts soon after the two 56px tiles');
+	is($p[2]{x}, 116, 'stretch starts at 56+2+56+2');
+}
+
 # skip console
 $cfg = Pldock::parse_conf_text(Pldock::default_conf_text(), 'builtin');
 $cfg->{root} = Pldock::prune_tree($cfg->{root}, { xconsole => 1 });
