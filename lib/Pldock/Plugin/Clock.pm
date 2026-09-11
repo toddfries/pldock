@@ -23,6 +23,9 @@ use Time::HiRes qw(time);
 #   epoch is Vostok 1 / Yuri Gagarin
 use constant CSD_UNIX => -275270400;
 use constant CSD_DIV  => 600_000;    # 10000 minutes in seconds
+use constant LAB_W    => 18;         # 3 glyphs of 6x13
+use constant GAP      => 4;          # px between label and day digits
+use constant PAD      => 2;          # px past each outer Month/DOW edge
 
 my %COLOR_NAME = (
     green   => 0x66CC66,
@@ -50,6 +53,33 @@ sub parse_color {
     $s =~ s/^0x//i;
     return hex($s) if $s =~ /^[0-9a-fA-F]{6}$/;
     return $COLOR_NAME{ lc $s };
+}
+
+sub _digit_scale {
+    my ($h) = @_;
+    $h = 57 unless defined $h && $h > 0;
+    return 3 if $h >= 52;
+    return 2 if $h >= 40;
+    return 1;
+}
+
+sub _day_w {
+    my ($s) = @_;
+    $s = 3 unless defined $s && $s > 0;
+    return 2 * (5 * $s) + ($s > 1 ? 2 : 1);
+}
+
+sub _cluster_w {
+    my ($s) = @_;
+    return LAB_W + GAP + _day_w($s) + GAP + LAB_W;
+}
+
+sub preferred_size {
+    my ($class, $h) = @_;
+    $h = 57 unless defined $h && $h > 0;
+    my $s = _digit_scale($h);
+    my $w = _cluster_w($s) + 2 * PAD;
+    return ($w, $h);
 }
 
 sub new {
@@ -107,8 +137,8 @@ sub parts_at {
     $when = time() unless defined $when;
     my $unix = int($when);
     my @t = localtime($unix);
-    my @mon = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
-    my @dow = qw(Sun Mon Tue Wed Thu Fri Sat);
+    my @mon = qw(JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC);
+    my @dow = qw(SUN MON TUE WED THU FRI SAT);
     my $hour = $t[2];
     my $min  = $t[1];
     my $sec  = $t[0];
@@ -171,13 +201,6 @@ my @DIGIT = (
     [ 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x11, 0x0E ],
 );
 
-sub _digit_scale {
-    my ($h) = @_;
-    return 3 if $h >= 52;
-    return 2 if $h >= 40;
-    return 1;
-}
-
 sub _draw_digit {
     my ($X, $win, $gc, $x, $y, $d, $s) = @_;
     return unless $gc && $d >= 0 && $d <= 9;
@@ -224,24 +247,29 @@ sub draw {
     my $p = $self->{parts};
     $p = $self->parts_at(time()) unless $p && $p->{time};
 
-    my $s = _digit_scale($h);
+    my $s     = _digit_scale($h);
+    my $day_w = _day_w($s);
     my $day_h = 7 * $s;
-    my $top = 11;
-    my $bot = $h - 3;
+    my $top   = 11;
+    my $sd_h  = 13;
+    my $bot   = $h - 3;
+    $bot = $sd_h if $bot < $sd_h;
+
     my $mid_y = int(($h - $day_h) / 2);
     $mid_y = $top + 2 if $mid_y < $top + 2;
-    if ($mid_y + $day_h > $bot - 12) {
-        $mid_y = $bot - 12 - $day_h;
+    if ($mid_y + $day_h > $bot - $sd_h) {
+        $mid_y = $bot - $sd_h - $day_h;
         $mid_y = 1 if $mid_y < 1;
     }
 
+    my $cx = int($w / 2);
+
     my $txt = $p->{time};
-    my $tw = length($txt) * 6;
-    my $tx = int(($w - $tw) / 2);
-    $tx = 2 if $tx < 2;
+    my $tw  = length($txt) * 6;
+    my $tx  = int(($w - $tw) / 2);
+    $tx = PAD if $tx < PAD;
     _text($X, $win, $gcs, $self, 0, $tx, $top, $txt);
 
-    my $cx = int($w / 2);
     if ($gcs->{fg}) {
         my $pix = $self->{colors}[2];
         eval { $X->ChangeGC($gcs->{fg}, foreground => $pix) } if defined $pix;
@@ -250,13 +278,19 @@ sub draw {
 
     my $side_y = $mid_y + int($day_h / 2) + 4;
     $side_y = $mid_y + 13 if $side_y < $mid_y + 8;
-    my $day_w = 2 * (5 * $s) + ($s > 1 ? 2 : 1);
-    my $gap  = 4;
-    my $lab_w = 18;    # 3 glyphs of 6x13
-    _text($X, $win, $gcs, $self, 1, $cx - int($day_w / 2) - $gap - $lab_w,
-        $side_y, $p->{mon});
-    _text($X, $win, $gcs, $self, 3, $cx + int($day_w / 2) + $gap,
-        $side_y, $p->{dow});
+    $side_y = $bot - 2 if $side_y > $bot - 2;
+
+    my $mon_x = $cx - int($day_w / 2) - GAP - LAB_W;
+    my $dow_x = $cx + int($day_w / 2) + GAP;
+    $mon_x = PAD if $mon_x < PAD;
+    _text($X, $win, $gcs, $self, 1, $mon_x, $side_y, $p->{mon});
+    _text($X, $win, $gcs, $self, 3, $dow_x, $side_y, $p->{dow});
+
+    my $sd = $p->{stardate};
+    my $sw = length($sd) * 6;
+    my $sx = int(($w - $sw) / 2);
+    $sx = PAD if $sx < PAD;
+    _text($X, $win, $gcs, $self, 4, $sx, $bot, $sd);
 }
 
 1;
