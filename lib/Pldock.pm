@@ -1706,7 +1706,8 @@ sub _plugin_event {
 		return 1 if $name eq 'ButtonRelease' && $s->{click_armed};
 		my $x = $ev->{event_x} // 0;
 		my $y = $ev->{event_y} // 0;
-		if ($s->{obj} && $s->{obj}->click($x, $y, $s->{w} || 1, $s->{h} || 1)) {
+		my $btn = $ev->{detail} || 1;
+		if ($s->{obj} && $s->{obj}->click($x, $y, $s->{w} || 1, $s->{h} || 1, $btn)) {
 			$s->{click_armed} = 1 if $name eq 'ButtonPress';
 			eval { $s->{obj}->sample };
 			_plugin_paint($st, $s);
