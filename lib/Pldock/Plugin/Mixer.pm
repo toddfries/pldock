@@ -170,14 +170,16 @@ sub set_face {
 # click($x,$y,$w,$h[,$button])
 # button 4 = wheel up (louder), 5 = wheel down (quieter)
 # left 14px / right 14px cycle faces
-# bar: click sets fraction; far-left of bar = min; far-right = max
-# mute strip under the bar
+# title strip = group (all units)
+# each slider = that unit; extras beyond what fits still follow the group hit
+# mute strip under the bars
 sub click {
     my ($self, $x, $y, $w, $h, $button) = @_;
     return 0 unless defined $x && $w;
     $button ||= 1;
     my $face = $self->_face;
     my $sio  = $self->{sio};
+    my $L    = $self->_layout($w, $h);
 
     if ($button == 4) {
         $sio->apply_delta($face, $self->{step} || 0.05) if $sio && $face;
@@ -188,42 +190,153 @@ sub click {
         return 1;
     }
 
-    my $hit = 14;
-    $hit = int($w / 4) if $w < 56;
-    $hit = 8 if $hit < 8;
-    if ($x <= $hit) {
+    if ($x <= $L->{hit}) {
         $self->cycle(-1);
         return 1;
     }
-    if ($x >= $w - $hit) {
+    if ($x >= $w - $L->{hit}) {
         $self->cycle(1);
         return 1;
     }
 
-    my $bar_top = 22;
-    my $bar_h   = 14;
-    my $mute_y  = $bar_top + $bar_h + 2;
-    my $left    = $hit + 2;
-    my $right   = $w - $hit - 2;
-    $right = $left + 8 if $right <= $left;
-
-    if ($y >= $mute_y) {
+    if ($y >= $L->{mute_y}) {
         $sio->toggle_mute($face) if $sio && $face;
         return 1;
     }
-    if ($y >= $bar_top && $y < $bar_top + $bar_h) {
-        my $bw = $right - $left;
-        if ($x < $left + 6) {
-            $sio->set_frac($face, 0) if $sio && $face;
-        } elsif ($x > $right - 6) {
-            $sio->set_frac($face, 1) if $sio && $face;
-        } elsif ($bw > 0) {
-            my $frac = ($x - $left) / $bw;
-            $sio->set_frac($face, $frac) if $sio && $face;
-        }
-        return 1;
+
+    my $unit;
+    if ($y < $L->{title_h}) {
+        $unit = undef;    # group
     }
-    return 0;
+    else {
+        $unit = $self->_hit_slider($L, $y);
+        return 1 unless defined $unit || $y >= $L->{title_h};
+        # click in the gap above sliders still means group
+        $unit = undef unless defined $unit;
+    }
+
+    $self->_set_bar($sio, $face, $L, $x, $unit);
+    return 1;
+}
+
+sub _set_bar {
+    my ($self, $sio, $face, $L, $x, $unit) = @_;
+    return unless $sio && $face;
+    my $left  = $L->{left};
+    my $right = $L->{right};
+    my $bw    = $right - $left;
+    if ($x < $left + 6) {
+        $sio->set_frac($face, 0, $unit);
+    }
+    elsif ($x > $right - 6) {
+        $sio->set_frac($face, 1, $unit);
+    }
+    elsif ($bw > 0) {
+        my $frac = ($x - $left) / $bw;
+        $sio->set_frac($face, $frac, $unit);
+    }
+}
+
+sub _hit_slider {
+    my ($self, $L, $y) = @_;
+    for my $s (@{ $L->{sliders} || [] }) {
+        return $s->{unit} if $y >= $s->{top} && $y < $s->{top} + $s->{h};
+    }
+    return;
+}
+
+# member units (>=0) if any; otherwise the singleton (-1 / missing)
+sub _slider_units {
+    my ($face) = @_;
+    my @u = Pldock::Sndio::face_units($face);
+    my @mem = grep { $_ >= 0 } @u;
+    return @mem if @mem;
+    return @u    if @u;
+    return (-1);
+}
+
+sub _layout {
+    my ($self, $w, $h) = @_;
+    $w ||= 1;
+    $h ||= 1;
+    my $hit = 14;
+    $hit = int($w / 4) if $w < 56;
+    $hit = 8 if $hit < 8;
+
+    my $left  = $hit + 2;
+    my $right = $w - $hit - 2;
+    $right = $left + 8 if $right <= $left;
+
+    my $title_h = 16;
+    my $mute_h  = 12;
+    my $top     = $title_h;
+    my $bot     = $h - $mute_h;
+    $bot = $top + 8 if $bot < $top + 8;
+
+    my @units = _slider_units($self->_face);
+    @units = (-1) unless @units;
+
+    my $gap     = 2;
+    my $min_bar = 6;
+    my $avail   = $bot - $top;
+    my $max_vis = int(($avail + $gap) / ($min_bar + $gap));
+    $max_vis = 1 if $max_vis < 1;
+    my $vis = @units > $max_vis ? $max_vis : scalar @units;
+    $vis = 1 if $vis < 1;
+
+    my $bar_h = int(($avail - ($vis - 1) * $gap) / $vis);
+    $bar_h = $min_bar if $bar_h < $min_bar;
+
+    my @sliders;
+    for my $i (0 .. $vis - 1) {
+        push @sliders, {
+            unit => $units[$i],
+            top  => $top + $i * ($bar_h + $gap),
+            h    => $bar_h,
+        };
+    }
+
+    return {
+        hit      => $hit,
+        left     => $left,
+        right    => $right,
+        title_h  => $title_h,
+        mute_y   => $bot,
+        sliders  => \@sliders,
+        n_hidden => (@units > $vis) ? (@units - $vis) : 0,
+    };
+}
+
+sub _frac {
+    my ($self, $face, $unit) = @_;
+    my $sio = $self->{sio};
+    return 0 unless $sio && $face;
+    my $f = $sio->frac($face, $unit);
+    $f = 0 if $f < 0;
+    $f = 1 if $f > 1;
+    return $f;
+}
+
+sub _fmt3 { sprintf('%.3f', $_[0]) }
+
+# "0.486" or "0.496(0.471,0.522)" — extra units appended, then clipped
+sub _value_text {
+    my ($self, $face, $maxch) = @_;
+    $maxch ||= 20;
+    my $g = _fmt3($self->_frac($face));
+    my @mem = grep { $_ >= 0 } Pldock::Sndio::face_units($face);
+    return $g unless @mem >= 2;
+
+    my $txt = $g . '(' . join(',', map { _fmt3($self->_frac($face, $_)) } @mem) . ')';
+    return $txt if length($txt) <= $maxch;
+
+    # keep group + first two (L/R) so stereo still reads
+    my $short = $g . '(' . join(',',
+        _fmt3($self->_frac($face, $mem[0])),
+        _fmt3($self->_frac($face, $mem[1])),
+    );
+    $short .= (@mem > 2) ? '+)' : ')';
+    return $short;
 }
 
 sub _text {
@@ -234,6 +347,30 @@ sub _text {
     eval { $X->ChangeGC($fg, foreground => $pix) } if defined $pix;
     eval { $X->ImageText8($win, $fg, $x, $y, $str) };
 }
+
+# Artificial mute (app/*): hardware level is 0, draw the pre-mute value.
+sub _shown_frac {
+    my ($self, $sio, $face) = @_;
+    return 0 unless $sio && $face;
+
+    if ($sio->is_muted($face) && !@{ $face->{mutes} || [] }) {
+        my $saved = $face->{saved};
+        my @lv    = @{ $face->{levels} || [] };
+        if ($saved && @lv) {
+            my ($sum, $n) = (0, 0);
+            for my $i (0 .. $#lv) {
+                my $max = $lv[$i]{maxval} || 1;
+                my $v   = $saved->[$i];
+                $sum += (defined $v ? $v : 0) / $max;
+                $n++;
+            }
+            return $n ? $sum / $n : 0;
+        }
+    }
+    return $sio->frac($face);
+}
+
+
 
 sub draw {
     my ($self, $X, $win, $gcs, $w, $h) = @_;
@@ -246,7 +383,7 @@ sub draw {
     my $label = $face ? $face->{key} : 'input';
     $label = substr($label, 0, 16) if length $label > 16;
     my $muted = $sio && $face ? $sio->is_muted($face) : 0;
-    my $frac  = $sio && $face ? $sio->frac($face) : 0;
+    my $frac  = $self->_shown_frac($sio, $face);
     $frac = 0 if $frac < 0;
     $frac = 1 if $frac > 1;
 

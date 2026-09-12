@@ -657,6 +657,9 @@ sub faces {
         return unless $f && @{ $f->{levels} || [] };
         $f->{level} = $f->{levels}[0];
         $f->{mute}  = $f->{mutes}[0] if @{ $f->{mutes} || [] };
+	if ($f->{key} && $self->{art_saved}{ $f->{key} }) {
+	    $f->{saved} = [ @{ $self->{art_saved}{ $f->{key} } } ];
+	}
         push @faces, $f;
     };
     $push->($by{input})  if $by{input};
@@ -669,10 +672,33 @@ sub faces {
     return @faces;
 }
 
-sub apply_delta {
-    my ($self, $face, $delta) = @_;
-    my $ok = 0;
+sub _levels_for {
+    my ($face, $unit) = @_;
+    my @lv = _levels($face);
+    return @lv unless defined $unit;
+    return grep {
+        my $u = defined $_->{unit} ? $_->{unit} : -1;
+        $u == $unit
+    } @lv;
+}
+
+# units present on this face, sorted; missing unit counts as -1
+sub face_units {
+    my ($face) = @_;
+    my %seen;
+    my @u;
     for my $c (_levels($face)) {
+        my $u = defined $c->{unit} ? $c->{unit} : -1;
+        next if $seen{$u}++;
+        push @u, $u;
+    }
+    return sort { $a <=> $b } @u;
+}
+
+sub apply_delta {
+    my ($self, $face, $delta, $unit) = @_;
+    my $ok = 0;
+    for my $c (_levels_for($face, $unit)) {
         my $max = $c->{maxval} || 1;
         my $val = ($c->{curval} || 0)
           + int($delta * $max + ($delta >= 0 ? 0.5 : -0.5));
@@ -684,12 +710,13 @@ sub apply_delta {
 }
 
 sub set_frac {
-    my ($self, $face, $frac) = @_;
+    my ($self, $face, $frac, $unit) = @_;
     $frac = 0 if $frac < 0;
     $frac = 1 if $frac > 1;
     my $ok = 0;
-    for my $c (_levels($face)) {
-        $ok++ if $self->setval($c->{addr}, int($frac * ($c->{maxval} || 1) + 0.5));
+    for my $c (_levels_for($face, $unit)) {
+        $ok++ if $self->setval($c->{addr},
+            int($frac * ($c->{maxval} || 1) + 0.5));
     }
     return $ok;
 }
@@ -709,6 +736,8 @@ sub toggle_mute {
     my @lv = _levels($face) or return 0;
     if (grep { ($_->{curval} || 0) > 0 } @lv) {
         $face->{saved} = [ map { $_->{curval} } @lv ];
+	$self->{art_saved}{ $face->{key} } = [ @{ $face->{saved} } ]
+	    if $face->{key};
         my $ok = 0;
         for my $c (@lv) { $ok++ if $self->setval($c->{addr}, 0); }
         return $ok;
@@ -720,6 +749,10 @@ sub toggle_mute {
           : ($lv[$i]{maxval} || 1);
         $ok++ if $self->setval($lv[$i]{addr}, $restore);
     }
+    if ($face->{key}) {
+	delete $self->{art_saved}{ $face->{key} };
+    }
+    delete $face->{saved};
     return $ok;
 }
 
