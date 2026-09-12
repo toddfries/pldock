@@ -16,7 +16,8 @@ package Pldock;
 
 use strict;
 use warnings;
-use POSIX qw(_exit WNOHANG);
+use POSIX qw(_exit WNOHANG mkfifo);
+use Fcntl qw(O_RDWR O_NONBLOCK);
 use Time::HiRes qw(time);
 use File::Basename qw(dirname);
 use File::Spec;
@@ -903,6 +904,97 @@ sub find_conf_path {
 	return;
 }
 
+sub ctl_path {
+	my $home = $ENV{HOME} // '';
+	return File::Spec->catfile($home, '.config', 'pldock', 'ctl');
+}
+
+sub conf_dir {
+	my $home = $ENV{HOME} // '';
+	return File::Spec->catdir($home, '.config', 'pldock');
+}
+
+my $_CTL_PATH;
+
+sub _ctl_open {
+	my ($st) = @_;
+	my $dir  = conf_dir();
+	my $path = ctl_path();
+	if ($dir && !-d $dir) {
+		require File::Path;
+		eval { File::Path::make_path($dir, { mode => 0700 }) };
+		if ($@ || !-d $dir) {
+			print STDERR "pldock: mkdir $dir: $!\n";
+			return;
+		}
+	}
+	if (-e $path && !-p $path) {
+		print STDERR "pldock: $path exists and is not a fifo\n";
+		return;
+	}
+	unless (-p $path) {
+		unless (mkfifo($path, 0600)) {
+			print STDERR "pldock: mkfifo $path: $!\n";
+			return;
+		}
+	}
+	my $fh;
+	unless (sysopen($fh, $path, O_RDWR | O_NONBLOCK)) {
+		print STDERR "pldock: open $path: $!\n";
+		return;
+	}
+	$st->{ctl_path} = $path;
+	$st->{ctl_fh}   = $fh;
+	$st->{ctl_fd}   = fileno($fh);
+	$st->{ctl_buf}  = '';
+	$_CTL_PATH      = $path;
+}
+
+sub _ctl_close {
+	my ($st) = @_;
+	close $st->{ctl_fh} if $st->{ctl_fh};
+	$st->{ctl_fh}  = undef;
+	$st->{ctl_fd}  = undef;
+	$st->{ctl_buf} = '';
+	my $path = $st->{ctl_path} || $_CTL_PATH;
+	unlink $path if $path && -p $path;
+	$st->{ctl_path} = undef;
+	$_CTL_PATH      = undef;
+}
+
+sub _ctl_cmd {
+	my ($st, $line) = @_;
+	$line = '' unless defined $line;
+	$line =~ s/\r$//;
+	$line =~ s/^\s+|\s+$//g;
+	return unless length $line;
+	my $cmd = lc $line;
+	if ($cmd eq 'exit' || $cmd eq 'quit') {
+		$st->{quit} = 1;
+		return;
+	}
+	if ($cmd eq 'reload' || $cmd eq 'hup') {
+		$st->{hup} = 1;
+		return;
+	}
+}
+
+sub _ctl_read {
+	my ($st) = @_;
+	my $fh = $st->{ctl_fh} or return;
+	my $n = sysread($fh, my $chunk, 4096);
+	return unless defined $n && $n > 0;
+	$st->{ctl_buf} .= $chunk;
+	while ($st->{ctl_buf} =~ s/\A([^\n]*)\n//) {
+		_ctl_cmd($st, $1);
+	}
+}
+
+END {
+	unlink $_CTL_PATH if $_CTL_PATH && -p $_CTL_PATH;
+}
+
+
 sub load_conf {
 	my ($path) = @_;
 	if (!defined $path || !length $path) {
@@ -1100,6 +1192,8 @@ sub run {
 	$SIG{PIPE} = 'IGNORE';
 	$SIG{CHLD} = sub { $state{reap} = 1 };
 
+	_ctl_open(\%state);
+
 	while (!$state{quit}) {
 		eval { _arm(\%state) };
 		if ($@) {
@@ -1110,6 +1204,7 @@ sub run {
 			}
 			if ($@ || !$state{dock}) {
 				_disarm(\%state);
+				_ctl_close(\%state);
 				return 1;
 			}
 		}
@@ -1147,9 +1242,13 @@ sub run {
 
 			my $rin = "";
 			vec($rin, $fd, 1) = 1;
+			my $cfd = $state{ctl_fd};
+			vec($rin, $cfd, 1) = 1 if defined $cfd;
 			my $n = select(my $rout = $rin, undef, undef, $tick);
-			if ($n && vec($rout, $fd, 1)) {
-				$X->handle_input;
+			if ($n) {
+				$X->handle_input if vec($rout, $fd, 1);
+				_ctl_read(\%state)
+				  if defined $cfd && vec($rout, $cfd, 1);
 			}
 		}
 
@@ -1157,6 +1256,7 @@ sub run {
 		last if $state{quit};
 		$state{hup} = 0;
 	}
+	_ctl_close(\%state);
 	return 0;
 }
 
