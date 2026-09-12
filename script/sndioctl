@@ -1,0 +1,79 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use File::Basename qw(dirname);
+use File::Spec;
+use Getopt::Std;
+
+BEGIN {
+    my $here = dirname(File::Spec->rel2abs($0));
+    unshift @INC, File::Spec->catdir($here, '..', 'lib');
+}
+
+use Pldock::Sndio;
+
+my %opt;
+getopts('df:imnqv', \%opt) or do {
+    print STDERR "usage: sndioctl [-dimnqv] [-f device] [command ...]\n";
+    exit 1;
+};
+
+my $unit = 0;
+my $profile = 'default';
+if ($opt{f}) {
+    if ($opt{f} =~ m{^snd(?:,(\d+))?/(\S+)$}) {
+        $unit    = defined $1 ? int($1) : 0;
+        $profile = $2;
+    } elsif ($opt{f} =~ /^\d+$/) {
+        $unit = int($opt{f});
+    }
+}
+
+my $sio = Pldock::Sndio->new(
+    unit => $unit,
+    opt  => $profile,
+    who  => 'sndioctl',
+);
+unless ($sio->connect) {
+    print STDERR ($sio->error || 'sndio: connect failed'), "\n";
+    exit 1;
+}
+
+if ($opt{d}) {
+    if (@ARGV) {
+        print STDERR "commands are not allowed with -d option\n";
+        exit 1;
+    }
+    print $_, "\n" for $sio->dump_lines;
+    exit 0;
+}
+
+if (@ARGV) {
+    for my $c (@ARGV) {
+        unless ($sio->cmd($c)) {
+            print STDERR ($sio->error || "bad command: $c"), "\n";
+            exit 1;
+        }
+    }
+}
+
+unless ($opt{q}) {
+    print $_, "\n" for $sio->list_lines(
+        verbose => $opt{v} ? 1 : 0,
+        nflag   => $opt{n} ? 1 : 0,
+    );
+}
+
+if ($opt{m}) {
+    $| = 1;
+    while (1) {
+        $sio->_wait_readable(undef) or last;
+        $sio->poll;
+        print $_, "\n" for $sio->list_lines(
+            verbose => $opt{v} ? 1 : 0,
+            nflag   => $opt{n} ? 1 : 0,
+        );
+    }
+}
+
+exit 0;
