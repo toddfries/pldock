@@ -774,8 +774,8 @@ sub is_muted {
 }
 
 sub frac {
-    my ($self, $face) = @_;
-    my @lv = _levels($face) or return 0;
+    my ($self, $face, $unit) = @_;
+    my @lv = _levels_for($face, $unit) or return 0;
     my ($sum, $n) = (0, 0);
     for my $c (@lv) {
         my $max = $c->{maxval} || 1;

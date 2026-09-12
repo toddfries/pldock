@@ -181,12 +181,22 @@ sub click {
     my $sio  = $self->{sio};
     my $L    = $self->_layout($w, $h);
 
+    my $unit;
+    if (defined $y) {
+        if ($y < $L->{title_h} || $y >= $L->{mute_y}) {
+            $unit = undef;    # title or mute strip = all units
+        }
+        else {
+            $unit = $self->_hit_slider($L, $y);
+        }
+    }
+
     if ($button == 4) {
-        $sio->apply_delta($face, $self->{step} || 0.05) if $sio && $face;
+        $sio->apply_delta($face, $self->{step} || 0.05, $unit) if $sio && $face;
         return 1;
     }
     if ($button == 5) {
-        $sio->apply_delta($face, -($self->{step} || 0.05)) if $sio && $face;
+        $sio->apply_delta($face, -($self->{step} || 0.05), $unit) if $sio && $face;
         return 1;
     }
 
@@ -204,7 +214,7 @@ sub click {
         return 1;
     }
 
-    my $unit;
+    $unit = undef;
     if ($y < $L->{title_h}) {
         $unit = undef;    # group
     }
@@ -350,7 +360,7 @@ sub _text {
 
 # Artificial mute (app/*): hardware level is 0, draw the pre-mute value.
 sub _shown_frac {
-    my ($self, $sio, $face) = @_;
+    my ($self, $sio, $face, $unit) = @_;
     return 0 unless $sio && $face;
 
     if ($sio->is_muted($face) && !@{ $face->{mutes} || [] }) {
@@ -359,6 +369,8 @@ sub _shown_frac {
         if ($saved && @lv) {
             my ($sum, $n) = (0, 0);
             for my $i (0 .. $#lv) {
+		my $u = defined $lv[$i]{unit} ? $lv[$i]{unit} : -1;
+		next if defined $unit && $u != $unit;
                 my $max = $lv[$i]{maxval} || 1;
                 my $v   = $saved->[$i];
                 $sum += (defined $v ? $v : 0) / $max;
@@ -367,10 +379,16 @@ sub _shown_frac {
             return $n ? $sum / $n : 0;
         }
     }
-    return $sio->frac($face);
+    return $sio->frac($face, $unit);
 }
 
-
+sub _slider_tag {
+    my ($unit, $n) = @_;
+    return '' unless $n > 1;
+    return 'L' if $n == 2 && $unit == 0;
+    return 'R' if $n == 2 && $unit == 1;
+    return $unit >= 0 ? "$unit" : '';
+}
 
 sub draw {
     my ($self, $X, $win, $gcs, $w, $h) = @_;
@@ -383,45 +401,52 @@ sub draw {
     my $label = $face ? $face->{key} : 'input';
     $label = substr($label, 0, 16) if length $label > 16;
     my $muted = $sio && $face ? $sio->is_muted($face) : 0;
-    my $frac  = $self->_shown_frac($sio, $face);
-    $frac = 0 if $frac < 0;
-    $frac = 1 if $frac > 1;
-
-    my $hit = 14;
-    $hit = int($w / 4) if $w < 56;
-    $hit = 8 if $hit < 8;
+    my $L     = $self->_layout($w, $h);
 
     _text($X, $win, $gcs, $self, 2, 2, 12, '<');
     _text($X, $win, $gcs, $self, 2, $w - 8, 12, '>');
     my $lw = length($label) * 6;
     my $lx = int(($w - $lw) / 2);
-    $lx = $hit if $lx < $hit;
+    $lx = $L->{hit} if $lx < $L->{hit};
     _text($X, $win, $gcs, $self, 2, $lx, 12, $label);
 
-    my $bar_top = 22;
-    my $bar_h   = 14;
-    my $left    = $hit + 2;
-    my $right   = $w - $hit - 2;
-    my $bw      = $right - $left;
-    $bw = 8 if $bw < 8;
-
+    my @pcts;
     if ($gcs->{fg}) {
         my $tick = $self->{colors}[3];
-        eval { $X->ChangeGC($gcs->{fg}, foreground => $tick) } if defined $tick;
-        $X->PolyLine($win, $gcs->{fg}, 'Origin',
-            $left, $bar_top + $bar_h, $left + $bw, $bar_top + $bar_h);
         my $barc = $muted ? $self->{colors}[1] : $self->{colors}[0];
-        eval { $X->ChangeGC($gcs->{fg}, foreground => $barc) } if defined $barc;
-        my $fw = int($bw * $frac);
-        $fw = 1 if $frac > 0 && $fw < 1;
-        $X->PolyFillRectangle($win, $gcs->{fg},
-            [ $left, $bar_top, $fw, $bar_h ]) if $fw > 0;
+        my $nbar = @{ $L->{sliders} || [] };
+        for my $s (@{ $L->{sliders} || [] }) {
+            my $frac = $self->_shown_frac($sio, $face, $s->{unit});
+            $frac = 0 if $frac < 0;
+            $frac = 1 if $frac > 1;
+            push @pcts, int($frac * 100 + 0.5);
+            my $bw = $L->{right} - $L->{left};
+            $bw = 8 if $bw < 8;
+            eval { $X->ChangeGC($gcs->{fg}, foreground => $tick) } if defined $tick;
+            $X->PolyLine($win, $gcs->{fg}, 'Origin',
+                $L->{left}, $s->{top} + $s->{h},
+                $L->{left} + $bw, $s->{top} + $s->{h});
+            eval { $X->ChangeGC($gcs->{fg}, foreground => $barc) } if defined $barc;
+            my $fw = int($bw * $frac);
+            $fw = 1 if $frac > 0 && $fw < 1;
+            $X->PolyFillRectangle($win, $gcs->{fg},
+                [ $L->{left}, $s->{top}, $fw, $s->{h} ]) if $fw > 0;
+            my $tag = _slider_tag($s->{unit}, $nbar);
+            _text($X, $win, $gcs, $self, 2,
+                $L->{left} - 8, $s->{top} + $s->{h} - 1, $tag)
+              if length $tag;
+        }
     }
 
-    my $pct      = sprintf('%d%%', int($frac * 100 + 0.5));
+    my $pct;
+    if (@pcts > 1 && grep { $_ != $pcts[0] } @pcts) {
+	$pct = join('/', @pcts) . '%';
+    } else {
+	$pct = sprintf('%d%%', @pcts ? $pcts[0] : 0);
+    }
     my $mute_txt = $muted ? 'MUTE' : 'mute';
-    _text($X, $win, $gcs, $self, $muted ? 1 : 2, $left, $h - 4, $mute_txt);
-    _text($X, $win, $gcs, $self, 2, $right - length($pct) * 6, $h - 4, $pct);
+    _text($X, $win, $gcs, $self, $muted ? 1 : 2, $L->{left}, $h - 4, $mute_txt);
+    _text($X, $win, $gcs, $self, 2, $L->{right} - length($pct) * 6, $h - 4, $pct);
 }
 
 1;
