@@ -57,11 +57,14 @@ if (@ARGV) {
     }
 }
 
+my %list = (
+    verbose => $opt{v} ? 1 : 0,
+    nflag   => $opt{n} ? 1 : 0,
+    members => ($opt{v} || $opt{n}) ? 0 : 1,
+);
+
 unless ($opt{q}) {
-    print $_, "\n" for $sio->list_lines(
-        verbose => $opt{v} ? 1 : 0,
-        nflag   => $opt{n} ? 1 : 0,
-    );
+    print $_, "\n" for $sio->list_lines(%list);
 }
 
 if ($opt{m}) {
@@ -69,10 +72,7 @@ if ($opt{m}) {
     while (1) {
         $sio->_wait_readable(undef) or last;
         $sio->poll;
-        print $_, "\n" for $sio->list_lines(
-            verbose => $opt{v} ? 1 : 0,
-            nflag   => $opt{n} ? 1 : 0,
-        );
+        print $_, "\n" for $sio->list_lines(%list);
     }
 }
 

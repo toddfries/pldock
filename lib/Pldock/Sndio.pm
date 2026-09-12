@@ -12,6 +12,7 @@ use IO::Socket::UNIX;
 use IO::Select;
 use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
 use Time::HiRes qw(time);
+use Errno qw(EAGAIN EWOULDBLOCK);
 
 use constant AMSG_ACK        => 0;
 use constant AMSG_DATA       => 5;
@@ -134,6 +135,7 @@ sub connect {
     }
     $s->autoflush(1);
     $self->{sock} = $s;
+    _nbio($s);
 
     my $cookie = cookie();
     unless (defined $cookie) {
@@ -189,8 +191,9 @@ sub connect {
     unless ($self->{synced}) {
         $self->{err} = 'sndio: no CTLSYNC (got '
           . (scalar keys %{ $self->{ctls} }) . ' controls)';
+        $self->disconnect;
+        return 0;
     }
-    _nbio($s);
     return 1;
 }
 
@@ -272,7 +275,11 @@ sub poll {
         my $have = length($self->{rbuf});
         if ($have < $need) {
             my $n = sysread($s, my $chunk, ($need - $have) > 4096 ? 4096 : ($need - $have));
-            last unless defined $n && $n > 0;
+            if (!defined $n) {
+                last if $! == EAGAIN || $! == EWOULDBLOCK;
+                last;
+            }
+            last unless $n > 0;
             $self->{rbuf} .= $chunk;
             $got += $n;
         }
@@ -424,17 +431,32 @@ sub list_lines {
             push @grp, $all[$j];
             $j++;
         }
-        my $mono = $opt{verbose} ? 0 : _ismono(\@grp);
-        if ($opt{verbose} || !$mono) {
-            my %byu;
-            for my $c (@grp) {
-                my $u = defined $c->{unit} ? $c->{unit} : -1;
-                push @{ $byu{$u} }, $c;
+
+        my %byu;
+        for my $c (@grp) {
+            my $u = defined $c->{unit} ? $c->{unit} : -1;
+            push @{ $byu{$u} }, $c;
+        }
+        my @units = sort { $a <=> $b } keys %byu;
+        my $mono  = _ismono(\@grp);
+
+        if ($opt{members}) {
+            # group-as-a-whole: valid "set every unit" command
+            push @out, $self->format_par(\@grp, mono => 1, nflag => $opt{nflag});
+            if (@units > 1) {
+                for my $u (@units) {
+                    push @out,
+                      $self->format_par($byu{$u}, mono => 0, nflag => $opt{nflag});
+                }
             }
-            for my $u (sort { $a <=> $b } keys %byu) {
-                push @out, $self->format_par($byu{$u}, mono => 0, nflag => $opt{nflag});
+        }
+        elsif ($opt{verbose} || !$mono) {
+            for my $u (@units) {
+                push @out,
+                  $self->format_par($byu{$u}, mono => 0, nflag => $opt{nflag});
             }
-        } else {
+        }
+        else {
             push @out, $self->format_par(\@grp, mono => 1, nflag => $opt{nflag});
         }
         $i = $j;
