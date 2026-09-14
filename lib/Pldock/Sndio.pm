@@ -35,12 +35,40 @@ use constant SIOCTL_VEC      => 4;
 use constant SIOCTL_LIST     => 5;
 use constant SIOCTL_SEL      => 6;
 
+sub parse_device {
+    my ($str) = @_;
+    my $unit = 0;
+    my $opt  = 'default';
+    return ($unit, $opt)
+      unless defined $str && length $str && $str ne 'default';
+    # sndio(7): type[@host][,servnum]/[devnum|option]
+    if ($str =~ m{^snd(?:@[^/,]+)?(?:,(\d+))?/(\S+)$}) {
+        $unit = defined $1 ? int($1) : 0;
+        $opt  = $2;
+    }
+    elsif ($str =~ /^\d+$/) {
+        $opt = $str;
+    }
+    return ($unit, $opt);
+}
+
 sub new {
     my ($class, %opt) = @_;
+    my $unit   = $opt{unit};
+    my $devopt = $opt{opt};
+    if (!defined $unit || !defined $devopt) {
+        my $dev = $opt{device};
+        $dev = $ENV{AUDIODEVICE} unless defined $dev && length $dev;
+        my ($u, $o) = parse_device($dev);
+        $unit   = $u unless defined $unit;
+        $devopt = $o unless defined $devopt;
+    }
+    $unit   = 0         unless defined $unit;
+    $devopt = 'default' unless defined $devopt && length $devopt;
     return bless {
-        unit      => defined $opt{unit} ? $opt{unit} : 0,
+        unit      => $unit,
         who       => substr($opt{who} || 'pldock', 0, 12),
-        opt       => substr($opt{opt} || 'default', 0, 12),
+        opt       => substr($devopt, 0, 12),
         sock      => undef,
         err       => undef,
         ctls      => {},

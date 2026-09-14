@@ -61,11 +61,14 @@ sub new {
     for my $i (0 .. 3) {
         $colors[$i] = $def[$i] unless defined $colors[$i];
     }
-    my $sio = Pldock::Sndio->new;
+    my $device = $opt{device};
+    $device = $ENV{AUDIODEVICE} unless defined $device && length $device;
+    my $sio = Pldock::Sndio->new(device => $device);
     $sio->connect;
     return bless {
         freq        => $freq,
         colors      => \@colors,
+	device      => $device,
         sio         => $sio,
         idx         => 0,
         faces       => [],
@@ -94,7 +97,7 @@ sub sample {
     $self->{next_sample} = time() + ($self->{freq} || 0.25);
     my $sio = $self->{sio};
     unless ($sio && $sio->{sock}) {
-        $sio ||= Pldock::Sndio->new;
+        $sio ||= Pldock::Sndio->new(device => $self->{device});
         $sio->connect;
         $self->{sio} = $sio;
     }
