@@ -977,6 +977,11 @@ sub _ctl_cmd {
 		$st->{hup} = 1;
 		return;
 	}
+	if ($cmd eq 'restart') {
+		$st->{restart} = 1;
+		$st->{quit}    = 1;
+		return;
+	}
 }
 
 sub _ctl_read {
@@ -1110,8 +1115,13 @@ cwm: add `ignore pldock` (and optionally wmclock / wmapm) to ~/.cwmrc.
 USAGE
 }
 
+our $RESTART_PROG;
+our @RESTART_ARGV;
+
 sub run_cli {
 	my (@argv) = @_;
+	$RESTART_PROG = File::Spec->rel2abs($0);
+	@RESTART_ARGV = @argv;
 	my %opt = eval { parse_cli_argv(@argv) };
 	if ($@) {
 		print STDERR $@;
@@ -1256,6 +1266,25 @@ sub run {
 		last if $state{quit};
 		$state{hup} = 0;
 	}
+	_disarm(\%state);
+	if ($state{restart}) {
+    		my $X = $state{X};
+    		eval { $X->closedown } if $X;
+    		$state{X} = undef;
+	
+    		_ctl_close(\%state);    # close + unlink fifo
+	
+    		my $prog = $Pldock::RESTART_PROG || File::Spec->rel2abs($0);
+    		my @args = @Pldock::RESTART_ARGV;
+	
+    		exec $prog, @args
+        		or exec $^X, $prog, @args
+        		or do {
+            			print STDERR "pldock: exec $prog: $!\n";
+            			POSIX::_exit(1);
+        		};
+	}
+
 	_ctl_close(\%state);
 	return 0;
 }

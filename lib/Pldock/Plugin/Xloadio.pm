@@ -64,8 +64,11 @@ sub new {
     my $input = lc($opt{input} || 'disk');
     $input = 'disk' unless $input =~ /^(disk|net|load|mem)$/;
     my $style = lc($opt{style} || '');
-    $style = $input eq 'mem' ? 'stack' : 'line'
-      unless $style =~ /^(line|bar|stack|lanes)$/;
+    unless ($style =~ /^(line|bar|stack|lanes|sidebyside)$/) {
+	$style = $input eq 'mem'  ? 'stack'
+          : $input eq 'load' ? 'sidebyside'
+          :                    'line';
+    }
     my $freq = $opt{freq};
     $freq = default_freq($input, $style) unless defined $freq && $freq > 0;
     $freq = 0.05 if $freq < 0.05;
@@ -203,7 +206,7 @@ sub cycle {
         }
     }
     if ($self->{input} eq 'load') {
-        my @st = qw(line bar stack lanes);
+        my @st = qw(sidebyside line bar stack lanes);
         my $i = 0;
         for my $k (0 .. $#st) { $i = $k if $st[$k] eq $self->{style} }
         $self->{style} = $st[ ($i + $dir) % @st ];
@@ -430,6 +433,55 @@ sub _hist_vec {
     return [];
 }
 
+# 2px bar per series, 1px gap between series, 2px gap between sample sets.
+sub _sidebyside_metrics {
+    my ($nser) = @_;
+    $nser = 1 if !$nser || $nser < 1;
+    my $bar_w   = 2;
+    my $gap     = 1;
+    my $set_gap = 2;
+    my $set_w   = $nser * $bar_w + ($nser - 1) * $gap + $set_gap;
+    return ($bar_w, $gap, $set_gap, $set_w);
+}
+
+sub _draw_sidebyside {
+    my ($self, $X, $win, $series, $left, $top, $gw, $gh) = @_;
+    my @hist = $self->_visible($gw, 'sidebyside');
+    return unless @hist;
+
+    my $nser = 0;
+    for my $p (@hist) {
+        my $n = @{ $self->_hist_vec($p) };
+        $nser = $n if $n > $nser;
+    }
+    $nser = 3 if $self->{input} eq 'load' && $nser < 3;
+    return unless $nser;
+
+    my ($bar_w, $gap, undef, $set_w) = _sidebyside_metrics($nser);
+    my $max = $self->_scale_max(@hist);
+    $max = 1 if $max <= 0;
+
+    for my $i (0 .. $#hist) {
+        my $x0 = $left + $i * $set_w;
+        last if $x0 >= $left + $gw;
+        my $vec = $self->_hist_vec($hist[$i]);
+        for my $j (0 .. $nser - 1) {
+            my $gc = $series->[$j] or next;
+            my $x  = $x0 + $j * ($bar_w + $gap);
+            last if $x >= $left + $gw;
+            my $hv = int($gh * ($vec->[$j] || 0) / $max);
+            $hv = $gh if $hv > $gh;
+            next unless $hv > 0;
+            my $bw = $bar_w;
+            $bw = $left + $gw - $x if $x + $bw > $left + $gw;
+            next unless $bw > 0;
+            $X->PolyFillRectangle($win, $gc,
+                [ $x, $top + $gh - $hv, $bw, $hv ]);
+        }
+    }
+}
+
+
 sub _visible {
     my ($self, $gw, $style) = @_;
     my $h = $self->_hist;
@@ -615,6 +667,8 @@ sub draw {
         _draw_stack($self, $X, $win, $series, $left, $top, $gw, $gh);
     } elsif ($style eq 'lanes') {
         _draw_lanes($self, $X, $win, $series, $grid, $left, $top, $gw, $gh);
+    } elsif ($style eq 'sidebyside') {
+	_draw_sidebyside($self, $X, $win, $series, $left, $top, $gw, $gh);
     } else {
         _draw_line($self, $X, $win, $series, $left, $top, $gw, $gh);
     }

@@ -162,7 +162,7 @@ sub parts_at {
 sub stardate {
     my ($unix) = @_;
     $unix = time() unless defined $unix;
-    return sprintf('%.4f', ($unix - CSD_UNIX) / CSD_DIV);
+    return sprintf('%.6f', ($unix - CSD_UNIX) / CSD_DIV);
 }
 
 sub cycle {
