@@ -497,6 +497,8 @@ sub _visible {
     return @$h[ -$use .. -1 ];
 }
 
+# Smallest 1/1.2/1.5/2/2.5/3/4/5/6/8/10 × 10^n that is >= $x.
+# The old 1-2-5 steps jumped 2.1 → 5, so traces sat in the bottom 40%.
 sub nice_ceil {
     my ($x) = @_;
     return 1 if !defined $x || $x <= 0;
@@ -504,8 +506,10 @@ sub nice_ceil {
     $exp-- if $x < 10 ** $exp;
     my $pow = 10 ** $exp;
     my $m   = $x / $pow;
-    my $n   = $m <= 1 ? 1 : $m <= 2 ? 2 : $m <= 5 ? 5 : 10;
-    return $n * $pow;
+    for my $n (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) {
+        return $n * $pow if $m <= $n + 1e-12;
+    }
+    return 10 * $pow;
 }
 
 sub _fmt_bytes {

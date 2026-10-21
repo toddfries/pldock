@@ -164,7 +164,10 @@ is_deeply($mem->_hist_vec({
 
 is(Pldock::Plugin::Xloadio::nice_ceil(1.0), 1, 'scale 1.0');
 is(Pldock::Plugin::Xloadio::nice_ceil(0.5), 0.5, 'scale 0.5');
-is(Pldock::Plugin::Xloadio::nice_ceil(0.51), 1, 'scale 0.51 -> 1');
+ok(abs(Pldock::Plugin::Xloadio::nice_ceil(0.51) - 0.6) < 1e-9, 'scale 0.51 -> 0.6');
+ok(abs(Pldock::Plugin::Xloadio::nice_ceil(1.01) - 1.2) < 1e-9, 'scale 1.01 -> 1.2 not 2');
+ok(abs(Pldock::Plugin::Xloadio::nice_ceil(2.01) - 2.5) < 1e-9, 'scale 2.01 -> 2.5 not 5');
+ok(abs(Pldock::Plugin::Xloadio::nice_ceil(2.6) - 3) < 1e-9, 'scale 2.6 -> 3 not 5');
 
 is(Pldock::Plugin::Xloadio::default_freq('load', 'lanes'), 0.25, 'lanes freq 1/4s');
 is(Pldock::Plugin::Xloadio::default_freq('disk', 'line'), 1, 'disk freq 1s');
