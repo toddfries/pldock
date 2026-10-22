@@ -1,0 +1,14 @@
+# kind mode source dest
+file	755	pldock	bin/pldock
+file	644	lib/Pldock.pm	libdata/perl5/site_perl/Pldock.pm
+file	644	lib/Pldock/Plugin.pm	libdata/perl5/site_perl/Pldock/Plugin.pm
+file	644	lib/Pldock/Sndio.pm	libdata/perl5/site_perl/Pldock/Sndio.pm
+file	644	lib/Pldock/Plugin/Barrel.pm	libdata/perl5/site_perl/Pldock/Plugin/Barrel.pm
+file	644	lib/Pldock/Plugin/Clock.pm	libdata/perl5/site_perl/Pldock/Plugin/Clock.pm
+file	644	lib/Pldock/Plugin/Cube.pm	libdata/perl5/site_perl/Pldock/Plugin/Cube.pm
+file	644	lib/Pldock/Plugin/Mixer.pm	libdata/perl5/site_perl/Pldock/Plugin/Mixer.pm
+file	644	lib/Pldock/Plugin/Script.pm	libdata/perl5/site_perl/Pldock/Plugin/Script.pm
+file	644	lib/Pldock/Plugin/Xloadio.pm	libdata/perl5/site_perl/Pldock/Plugin/Xloadio.pm
+file	644	pldock.1	man/man1/pldock.1
+file	644	pldock.conf.1	man/man1/pldock.conf.1
+file	644	pldock.conf	share/examples/pldock/pldock.conf

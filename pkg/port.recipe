@@ -1,0 +1,17 @@
+# Local distfile for the OpenBSD wip port. The file list is port.manifest.
+# sh ~/.grok/skills/upport/scripts/bake.sh pkg/port.recipe
+name=pldock
+version=0.1
+category=x11
+comment=Perl X11 swallow dock with plugins
+maintainer=Todd T. Fries <todd@fries.net>
+permit=Yes
+pkg_arch=*
+no_build=yes
+no_test=yes
+distfiles=/tlaptop.f/todd/distfiles
+ports_root=/usr/ports/openbsd-wip
+ports_distfiles=/usr/ports/distfiles
+ports_packages=/usr/ports/packages/amd64
+ports_plist=/usr/ports/plist/amd64
+sites=file:///tlaptop.f/todd/distfiles/
