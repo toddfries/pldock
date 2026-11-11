@@ -20,6 +20,7 @@
 .Nd swallow X clients into a Perl X11 dock rectangle
 .Sh SYNOPSIS
 .Nm pldock
+.Op Fl d
 .Op Fl v
 .Op Fl c Ar file
 .Op Fl screen Ar output
@@ -87,6 +88,16 @@ including the last path component, so a class of
 matches tile
 .Ic wmapm .
 .Pp
+By default
+.Nm
+detaches from the terminal and logs to
+.Xr syslog 3
+facility
+.Ic daemon
+.Pq like piping through plogger .
+.Fl d
+stays in the foreground and writes the same messages to standard error.
+.Pp
 The dock is a normal managed window by default so
 .Xr cwm 1
 can select and cycle it.
@@ -151,10 +162,16 @@ over two seconds per
 .Ql >
 .
 Falls back to a software barrel if GL cannot be initialised.
+.It Fl d , Fl debug , Fl foreground
+Do not daemonize.
+Log to standard error instead of syslog.
 .It Fl v , Fl verbose
 Log each xrandr output, the dock rectangle, and every ingest attempt
 by name
 .Pq looking for, found, ingested, or not found .
+With
+.Fl d
+these lines go to stderr; otherwise to syslog.
 .It Fl no-clock , Fl no-apm , Fl no-load , Fl no-console
 Skip that tile.
 .It Fl h , Fl help

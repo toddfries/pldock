@@ -16,7 +16,7 @@ package Pldock;
 
 use strict;
 use warnings;
-use POSIX qw(_exit WNOHANG mkfifo);
+use POSIX qw(_exit WNOHANG mkfifo setsid);
 use Fcntl qw(O_RDWR O_NONBLOCK);
 use Time::HiRes qw(time);
 use File::Basename qw(dirname);
@@ -924,23 +924,23 @@ sub _ctl_open {
 		require File::Path;
 		eval { File::Path::make_path($dir, { mode => 0700 }) };
 		if ($@ || !-d $dir) {
-			print STDERR "pldock: mkdir $dir: $!\n";
+			_log('err', "mkdir $dir: $!");
 			return;
 		}
 	}
 	if (-e $path && !-p $path) {
-		print STDERR "pldock: $path exists and is not a fifo\n";
+		_log('err', "$path exists and is not a fifo");
 		return;
 	}
 	unless (-p $path) {
 		unless (mkfifo($path, 0600)) {
-			print STDERR "pldock: mkfifo $path: $!\n";
+			_log('err', "mkfifo $path: $!");
 			return;
 		}
 	}
 	my $fh;
 	unless (sysopen($fh, $path, O_RDWR | O_NONBLOCK)) {
-		print STDERR "pldock: open $path: $!\n";
+		_log('err', "open $path: $!");
 		return;
 	}
 	$st->{ctl_path} = $path;
@@ -1023,6 +1023,7 @@ sub parse_cli_argv {
 		screen   => undef,
 		spawn    => 0,
 		verbose  => 0,
+		debug    => 0,
 		want_3d  => 0,
 		managed  => 0,
 		skip     => {},
@@ -1052,6 +1053,8 @@ sub parse_cli_argv {
 			$opt{spawn} = 1;
 		} elsif ($a eq '-3d' || $a eq '--3d') {
 			$opt{want_3d} = 1;
+		} elsif ($a eq '-d' || $a eq '-debug' || $a eq '-foreground') {
+			$opt{debug} = 1;
 		} elsif ($a eq '-v' || $a eq '-verbose') {
 			$opt{verbose} = 1;
 		} elsif ($a eq '-managed') {
@@ -1104,6 +1107,7 @@ options:
   -managed            let the WM place/select the dock (default)
   -spawn              fork/exec tiles that are not already mapped
   -3d, --3d           OpenGL cube spin on xloadio < > (cubetest / SDL::OpenGL)
+  -d, -debug          stay in the foreground, log to stderr (not syslog)
   -v, -verbose        log screen pick and each ingest attempt by name
   -no-clock           do not swallow wmclock
   -no-apm             do not swallow wmapm
@@ -1117,6 +1121,46 @@ USAGE
 
 our $RESTART_PROG;
 our @RESTART_ARGV;
+our $LOG_SYSLOG = 0;
+
+sub _log {
+	my ($pri, $msg) = @_;
+	$msg = '' unless defined $msg;
+	$msg =~ s/\n+\z//;
+	$msg =~ s/^pldock:\s*//;
+	return unless length $msg;
+	if ($LOG_SYSLOG) {
+		eval {
+			require Sys::Syslog;
+			Sys::Syslog::syslog(
+				($pri eq 'err' ? 'err' : $pri eq 'debug' ? 'debug' : 'info'),
+				'%s', $msg
+			);
+		};
+	} else {
+		print STDERR "pldock: $msg\n";
+	}
+}
+
+sub _log_init {
+	my ($syslog) = @_;
+	$LOG_SYSLOG = $syslog ? 1 : 0;
+	if ($LOG_SYSLOG) {
+		require Sys::Syslog;
+		Sys::Syslog::openlog('pldock', 'pid,ndelay,nowait', 'daemon');
+	}
+}
+
+sub _daemonize {
+	my $pid = fork;
+	die "pldock: fork: $!\n" unless defined $pid;
+	_exit(0) if $pid;
+	setsid() or die "pldock: setsid: $!\n";
+	chdir '/' or die "pldock: chdir: $!\n";
+	open STDIN,  '<', '/dev/null' or die "pldock: stdin: $!\n";
+	open STDOUT, '>', '/dev/null' or die "pldock: stdout: $!\n";
+	open STDERR, '>', '/dev/null' or die "pldock: stderr: $!\n";
+}
 
 sub run_cli {
 	my (@argv) = @_;
@@ -1132,6 +1176,16 @@ sub run_cli {
 		print_cli_usage();
 		return 2;
 	}
+	if (!defined $ENV{DISPLAY} || $ENV{DISPLAY} eq '') {
+		print STDERR "pldock: DISPLAY is unset\n";
+		return 1;
+	}
+	if ($opt{debug}) {
+		_log_init(0);
+	} else {
+		_daemonize();
+		_log_init(1);
+	}
 	return run(%opt);
 }
 
@@ -1143,7 +1197,7 @@ sub run {
 	my (%opt) = @_ == 1 && ref $_[0] eq 'HASH' ? %{ $_[0] } : @_;
 
 	if (!defined $ENV{DISPLAY} || $ENV{DISPLAY} eq '') {
-		print STDERR "pldock: DISPLAY is unset\n";
+		_log('err', "DISPLAY is unset");
 		return 1;
 	}
 
@@ -1207,7 +1261,7 @@ sub run {
 	while (!$state{quit}) {
 		eval { _arm(\%state) };
 		if ($@) {
-			print STDERR $@;
+			_log('err', $@);
 			if ($state{cfg}) {
 				# SIGHUP re-read failed: put the last good layout back.
 				eval { _create_session(\%state, $state{cfg}) };
@@ -1280,7 +1334,7 @@ sub run {
     		exec $prog, @args
         		or exec $^X, $prog, @args
         		or do {
-            			print STDERR "pldock: exec $prog: $!\n";
+            			_log('err', "exec $prog: $!");
             			POSIX::_exit(1);
         		};
 	}
@@ -1346,8 +1400,8 @@ sub _create_session {
 	my $screen = pick_output(\@outputs, $want);
 	if (!$screen) {
 		my $have = join ", ", map { $_->{name} } @outputs;
-		print STDERR "pldock: no xrandr output '$want'"
-		  . ($have ? " (have: $have)" : "") . "\n";
+		_log('err', "no xrandr output '$want'"
+		  . ($have ? " (have: $have)" : ""));
 		$screen = pick_output(\@outputs, 'primary') || $outputs[0];
 	}
 	$screen ||= {
@@ -1610,9 +1664,9 @@ sub _gl_ready {
 	}
 	_v($st, "OpenGL init failed: " . Pldock::Plugin::Cube::last_error());
 	if ($st->{want_3d}) {
-		print STDERR "pldock: --3d OpenGL cube failed ("
+		_log('err', "--3d OpenGL cube failed ("
 		  . (Pldock::Plugin::Cube::last_error() || 'init')
-		  . "); using software barrel\n";
+		  . "); using software barrel");
 	}
 	return 0;
 }
@@ -1770,7 +1824,7 @@ sub _start_plugins {
 			);
 		};
 		if ($@ || !$obj) {
-			print STDERR "pldock: plugin $s->{plugin}: $@";
+			_log('err', "plugin $s->{plugin}: $@");
 			next;
 		}
 		my $win = $X->new_rsrc;
@@ -2098,7 +2152,7 @@ sub _ok_reply {
 sub _v {
 	my ($st, $msg) = @_;
 	return unless $st && $st->{verbose};
-	print STDERR "pldock: $msg\n";
+	_log('info', $msg);
 }
 
 sub _candidate_windows {

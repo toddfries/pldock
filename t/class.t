@@ -76,4 +76,9 @@ is($cli{screen}, 'HDMI-1', 'cli -screen');
 ok($cli{spawn}, 'cli -spawn');
 ok($cli{verbose}, 'cli -v');
 
+{
+	my %d = Pldock::parse_cli_argv(qw(-d));
+	ok($d{debug}, 'cli -d');
+}
+
 done_testing();
